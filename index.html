@@ -1486,12 +1486,12 @@
                 const isEditingEmotion = ref(false);
                 // 音效库状态
                 const sfxLibrary = ref([]);
-                const sfxForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 1.0 });
+                const sfxForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 });
                 const isEditingSfx = ref(false);
 
                 // BGM库状态
                 const bgmLibrary = ref([]);
-                const bgmForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 1.0 });
+                const bgmForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 });
                 const isEditingBgm = ref(false);
 
                 // 滤波器库状态
@@ -2074,8 +2074,8 @@
                             }
 
                             if (projectData.libraries) {
-                                sfxLibrary.value = projectData.libraries.sfx || [];
-                                bgmLibrary.value = projectData.libraries.bgm || [];
+                                sfxLibrary.value = (projectData.libraries.sfx || []).map(s => ({ ...s, volume: s.volume ?? 0.3 }));
+                                bgmLibrary.value = (projectData.libraries.bgm || []).map(b => ({ ...b, volume: b.volume ?? 0.3 }));
                                 timbres.value = projectData.libraries.timbres || [];
                                 filterLibrary.value = projectData.libraries.filters || [];
                                 if (projectData.libraries.emotions && Array.isArray(projectData.libraries.emotions)) {
@@ -2588,7 +2588,7 @@
                 };
 
                 const resetSfxForm = () => {
-                    sfxForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 1.0 };
+                    sfxForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 };
                     isEditingSfx.value = false;
                 };
 
@@ -2598,7 +2598,7 @@
                         sfxForm.value.filename = file.name;
                         sfxForm.value.trimStart = 0;
                         sfxForm.value.trimEnd = 1;
-                        sfxForm.value.volume = 1.0;
+                        sfxForm.value.volume = 0.3;
                         localFileMap.value.set(file.name, file);
                         saveAssetToDB(file.name, file); // Save to DB
                         triggerAutoSave();
@@ -2643,7 +2643,7 @@
                 };
 
                 const resetBgmForm = () => {
-                    bgmForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 1.0 };
+                    bgmForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 };
                     isEditingBgm.value = false;
                 };
 
@@ -2653,7 +2653,7 @@
                         bgmForm.value.filename = file.name;
                         bgmForm.value.trimStart = 0;
                         bgmForm.value.trimEnd = 1;
-                        bgmForm.value.volume = 1.0;
+                        bgmForm.value.volume = 0.3;
                         localFileMap.value.set(file.name, file);
                         saveAssetToDB(file.name, file); // Save to DB
                         triggerAutoSave();
@@ -3528,8 +3528,8 @@
 
                                 // 2. 恢复资源库
                                 if (data.libraries) {
-                                    sfxLibrary.value = await restoreLibraryFiles(data.libraries.sfx, 'filename');
-                                    bgmLibrary.value = await restoreLibraryFiles(data.libraries.bgm, 'filename');
+                                    sfxLibrary.value = (await restoreLibraryFiles(data.libraries.sfx, 'filename')).map(s => ({ ...s, volume: s.volume ?? 0.3 }));
+                                    bgmLibrary.value = (await restoreLibraryFiles(data.libraries.bgm, 'filename')).map(b => ({ ...b, volume: b.volume ?? 0.3 }));
                                     timbres.value = await restoreLibraryFiles(data.libraries.timbres, 'refPath');
                                     filterLibrary.value = data.libraries.filters || [];
                                     emotionPresets.value = data.libraries.emotions || [];
@@ -4151,7 +4151,7 @@
                         text: text,
                         trimStart: 0,
                         trimEnd: 1,
-                        sfxVolume: 0.5,
+                        sfxVolume: 1.0,
                         dialogueVolume: 1.0,
                         speed: 1.0,
                         audioUrl: '',
@@ -4164,7 +4164,7 @@
                         id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
                         type: 'bgm',
                         action: 'play',
-                        volume: 0.4,
+                        volume: 1.0,
                         bgmName: bgmLibrary.value.length > 0 ? bgmLibrary.value[0].name : ''
                     };
                     if (selectedLineIndex.value !== -1 && selectedLineIndex.value < scriptLines.value.length) {
@@ -4189,7 +4189,7 @@
                         trimEnd: 1,
                         sfx: [],
                         break_duration: 0,
-                        sfxVolume: 0.5,
+                        sfxVolume: 1.0,
                         dialogueVolume: 1.0,
                         speed: 1.0,
                         audioUrl: '',
@@ -4582,13 +4582,13 @@
                                     break_duration: typeof item.break_duration === 'number' ? item.break_duration : 0,
                                     trimStart: 0,
                                     trimEnd: 1,
-                                    sfxVolume: 0.5,
+                                    sfxVolume: 1.0,
                                     dialogueVolume: 1.0,
                                     audioUrl: '',
                                     isGenerating: false,
                                     // BGM fields
                                     action: item.action || 'play',
-                                    volume: 0.4,
+                                    volume: 1.0,
                                     bgmName: matchedBgmName
                                 };
                             });
