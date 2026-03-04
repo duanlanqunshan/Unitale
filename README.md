@@ -31,6 +31,8 @@ https://www.bilibili.com/video/BV1jYkGBqEkL
 
 https://sdsds222.github.io/Unitale/
 
+进行了一些细节上的优化，现在支持音效和BGM剪辑功能，音效BGM和台词的全局音量控制功能。支持一个工程内创建多个脚本，通过选项卡进行切换。
+
 现已支持音色自动分析生成功能，基于llm分析剧情，产生角色音色描述文本，再利用描述文本使用qwen3tts生成音色参考音频。
 
 初始资源包（含音色、音效、BGM等素材）：
