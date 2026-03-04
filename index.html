@@ -3471,6 +3471,7 @@
                     const reader = new FileReader();
                     reader.onload = async (e) => {
                         try {
+                            isRestoring.value = true; // 导入期间锁定，防止自动保存触发
                             isExportingProject.value = true; // 复用 loading 状态
                             exportStatus.value = '解析中...';
 
