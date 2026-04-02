@@ -124,7 +124,7 @@
                 </button>
                 <button @click="exportAudio" :disabled="isExportingAudio"
                     class="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
-                    {{ isExportingAudio ? '⏳ 处理中...' : '导出音频' }}
+                    {{ isExportingAudio ? (exportStatus || '⏳ 处理中...') : '导出音频' }}
                 </button>
                 <select v-model="videoResolution" class="px-2 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-bold outline-none focus:ring-2 focus:ring-sky-500">
                     <option value="1920x1080">横屏 16:9</option>
@@ -134,7 +134,7 @@
                 </select>
                 <button @click="generateVideo" :disabled="isExportingAudio || isSequencePlaying || isGeneratingVideo"
                     class="px-3 py-1.5 bg-sky-100 text-sky-700 rounded-lg text-xs font-bold hover:bg-sky-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
-                    {{ isGeneratingVideo ? '⏳ 生成视频...' : '生成视频' }}
+                    {{ isGeneratingVideo ? (exportStatus || '⏳ 生成视频...') : '生成视频' }}
                 </button>
                 <input type="file" ref="importFileRef" @change="handleImportFile" accept=".json" class="hidden">
                 <input type="file" ref="importTxtRef" @change="handleImportTxt" accept=".txt" class="hidden">
@@ -3603,26 +3603,55 @@
                         exportStatus.value = '生成文件...';
                         await new Promise(r => setTimeout(r, 50)); // 给 UI 一点时间刷新
 
-                        const data = {
-                            version: '2.0',
-                            timestamp: new Date().toISOString(),
-                            // 资源库
-                            libraries: {
-                                sfx: sfxExport,
-                                bgm: bgmExport,
-                                timbres: timbreExport,
-                                filters: filterLibrary.value,
-                                emotions: emotionPresets.value
-                            },
-                            // 项目状态
-                            project: {
-                                // rawScript: rawScript.value, // 不再需要顶层
-                                characters: characters.value,
-                                scriptList: scriptListExport,
-                                currentScriptId: currentScriptId.value
+                        const blobParts = [];
+                        blobParts.push('{\n  "version": "2.0",\n  "timestamp": "' + new Date().toISOString() + '",\n  "libraries": {\n');
+
+                        blobParts.push('    "sfx": [');
+                        for (let i = 0; i < sfxExport.length; i++) {
+                            blobParts.push(JSON.stringify(sfxExport[i]));
+                            if (i < sfxExport.length - 1) blobParts.push(',');
+                        }
+                        blobParts.push('],\n');
+
+                        blobParts.push('    "bgm": [');
+                        for (let i = 0; i < bgmExport.length; i++) {
+                            blobParts.push(JSON.stringify(bgmExport[i]));
+                            if (i < bgmExport.length - 1) blobParts.push(',');
+                        }
+                        blobParts.push('],\n');
+
+                        blobParts.push('    "timbres": [');
+                        for (let i = 0; i < timbreExport.length; i++) {
+                            blobParts.push(JSON.stringify(timbreExport[i]));
+                            if (i < timbreExport.length - 1) blobParts.push(',');
+                        }
+                        blobParts.push('],\n');
+
+                        blobParts.push('    "filters": ' + JSON.stringify(filterLibrary.value) + ',\n');
+                        blobParts.push('    "emotions": ' + JSON.stringify(emotionPresets.value) + '\n  },\n');
+
+                        blobParts.push('  "project": {\n');
+                        blobParts.push('    "characters": ' + JSON.stringify(characters.value) + ',\n');
+                        
+                        blobParts.push('    "scriptList": [');
+                        for (let i = 0; i < scriptListExport.length; i++) {
+                            blobParts.push('{"id":' + JSON.stringify(scriptListExport[i].id) + ',"name":' + JSON.stringify(scriptListExport[i].name) + ',"data":{');
+                            blobParts.push('"rawScript":' + JSON.stringify(scriptListExport[i].data.rawScript || '') + ',"rawAnalysisResult":' + JSON.stringify(scriptListExport[i].data.rawAnalysisResult || '') + ',"characters":' + JSON.stringify(scriptListExport[i].data.characters || []) + ',"scriptLines":[');
+                            
+                            const lines = scriptListExport[i].data.scriptLines || [];
+                            for (let j = 0; j < lines.length; j++) {
+                                blobParts.push(JSON.stringify(lines[j]));
+                                if (j < lines.length - 1) blobParts.push(',');
                             }
-                        };
-                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                            
+                            blobParts.push(']}}');
+                            if (i < scriptListExport.length - 1) blobParts.push(',');
+                        }
+                        blobParts.push('],\n');
+                        
+                        blobParts.push('    "currentScriptId": ' + JSON.stringify(currentScriptId.value) + '\n  }\n}');
+
+                        const blob = new Blob(blobParts, { type: 'application/json' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
@@ -4987,7 +5016,7 @@
                         const renderVideoPromise = async () => {
                             // 绘制视频帧
                             const offscreenCanvas = new OffscreenCanvas(width, height);
-                            const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
+                            const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
                             const totalFrames = Math.ceil(totalDuration * fps);
                             
                             const drawCover = (ctx, img, cw, ch) => {
@@ -5003,6 +5032,9 @@
                             const fadeFrames = Math.floor(0.25 * fps); // 250ms fade
                             let fadeCounter = 0;
                             let prevBgUrl = '';
+                            
+                            let lastDrawnBgUrl = null;
+                            let lastDrawnAlpha = -1;
 
                             for (let i = 0; i < totalFrames; i++) {
                                 const t = i / fps;
@@ -5015,28 +5047,37 @@
                                 
                                 const stage = visualTimeline[currentTimelineIndex];
                                 const currentUrl = stage ? stage.url : '';
-                                
-                                offscreenCtx.fillStyle = '#000';
-                                offscreenCtx.fillRect(0, 0, width, height);
 
                                 let alpha = 1;
+                                let isFading = false;
                                 if (fadeCounter > 0 && prevBgUrl !== currentUrl) {
                                     alpha = 1 - (fadeCounter / fadeFrames);
                                     fadeCounter--;
-                                    if (bgImageCache.has(prevBgUrl)) {
+                                    isFading = true;
+                                }
+
+                                const needsRedraw = isFading || currentUrl !== lastDrawnBgUrl || alpha !== lastDrawnAlpha;
+                                
+                                if (needsRedraw) {
+                                    offscreenCtx.fillStyle = '#000';
+                                    offscreenCtx.fillRect(0, 0, width, height);
+
+                                    if (isFading && bgImageCache.has(prevBgUrl)) {
                                         const img = bgImageCache.get(prevBgUrl);
                                         offscreenCtx.globalAlpha = 1 - alpha;
                                         drawCover(offscreenCtx, img, width, height);
                                     }
-                                }
 
-                                if (currentUrl && bgImageCache.has(currentUrl)) {
-                                    const img = bgImageCache.get(currentUrl);
-                                    offscreenCtx.globalAlpha = alpha;
-                                    drawCover(offscreenCtx, img, width, height);
+                                    if (currentUrl && bgImageCache.has(currentUrl)) {
+                                        const img = bgImageCache.get(currentUrl);
+                                        offscreenCtx.globalAlpha = alpha;
+                                        drawCover(offscreenCtx, img, width, height);
+                                    }
+                                    
+                                    offscreenCtx.globalAlpha = 1;
+                                    lastDrawnBgUrl = currentUrl;
+                                    lastDrawnAlpha = alpha;
                                 }
-                                
-                                offscreenCtx.globalAlpha = 1;
 
                                 while (videoEncoder.encodeQueueSize > 30) {
                                     if (videoEncoder.state !== 'configured') {
