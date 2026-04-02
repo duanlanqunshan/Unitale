@@ -15,6 +15,7 @@
     <title>unitale ai工具</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
     <style>
         .thinking {
             color: #6b7280;
@@ -67,12 +68,15 @@
 
 <body class="p-4 md:p-8">
     <div id="app" class="w-full max-w-[96%] mx-auto p-6 rounded-2xl shadow-2xl">
+        <!-- 视频/播放用背景层：不修改原有 body 随机背景 CSS，仅在有 bgImage 块时覆盖显示 -->
+        <div v-if="stageBgUrl" class="fixed inset-0 -z-10 bg-center bg-cover transition-opacity duration-300"
+            :style="{ backgroundImage: `url(${stageBgUrl})` }"></div>
         <header class="mb-6 flex justify-between items-end">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">Unitale AI <span class="text-blue-600">1.4</span></h1>
+                <h1 class="text-2xl font-bold text-slate-800">Unitale AI <span class="text-blue-600">1.5</span></h1>
                 <p style="color: rgb(39, 92, 120);" class="text-slate-400 text-xs mt-1">多角色音效合成有声书生成工具</p>
             </div>
-            <div class="text-[10px] text-slate-300">v1.4</div>
+            <div class="text-[10px] text-slate-300">v1.5</div>
         </header>
 
         <!-- 标签页导航 -->
@@ -122,8 +126,19 @@
                     class="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
                     {{ isExportingAudio ? '⏳ 处理中...' : '导出音频' }}
                 </button>
+                <select v-model="videoResolution" class="px-2 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-bold outline-none focus:ring-2 focus:ring-sky-500">
+                    <option value="1920x1080">横屏 16:9</option>
+                    <option value="1080x1920">竖屏 9:16</option>
+                    <option value="1280x960">横屏 4:3</option>
+                    <option value="960x1280">竖屏 3:4</option>
+                </select>
+                <button @click="generateVideo" :disabled="isExportingAudio || isSequencePlaying || isGeneratingVideo"
+                    class="px-3 py-1.5 bg-sky-100 text-sky-700 rounded-lg text-xs font-bold hover:bg-sky-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
+                    {{ isGeneratingVideo ? '⏳ 生成视频...' : '生成视频' }}
+                </button>
                 <input type="file" ref="importFileRef" @change="handleImportFile" accept=".json" class="hidden">
                 <input type="file" ref="importTxtRef" @change="handleImportTxt" accept=".txt" class="hidden">
+                <input type="file" ref="bgImagePickerRef" @change="handleBgImageFileChange" accept="image/*" class="hidden">
             </div>
         </div>
 
@@ -794,54 +809,87 @@
                     <textarea v-model="rawScript"
                         class="w-full p-4 border rounded-xl h-48 mb-4 focus:ring-2 focus:ring-blue-500 outline-none resize-none bg-slate-50 text-sm leading-relaxed"
                         placeholder="请粘贴小说内容或剧本原文..."></textarea>
-                    <div class="flex flex-wrap gap-2">
-                        <select v-model="currentConfigId"
-                            class="px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white max-w-[180px]"
-                            title="选择用于分析的 LLM 模型">
-                            <option value="" disabled>-- 选择LLM模型 --</option>
-                            <option v-for="conf in llmConfigs" :key="conf.id" :value="conf.id">
-                                {{ conf.name }}
-                            </option>
-                        </select>
-                        <button @click="analyzeScript"
-                            :class="['px-3 py-2 text-white rounded-lg text-sm font-bold transition-all flex items-center', isAnalyzingScript ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50']">
-                            <span v-if="isAnalyzingScript" class="animate-spin mr-2">⏳</span> {{ isAnalyzingScript ?
-                            '停止分析' : 'AI 深度分析' }}
-                        </button>
-                        <button @click="addDialogueBlock"
-                            class="px-2 py-2 bg-blue-100 text-blue-600 rounded-lg text-sm font-bold hover:bg-blue-200 transition-all">
-                            ➕ 插入台词
-                        </button>
-                        <button @click="addBgmBlock"
-                            class="px-2 py-2 bg-purple-100 text-purple-600 rounded-lg text-sm font-bold hover:bg-purple-200 transition-all">
-                            ➕ 插入BGM
-                        </button>
-                        <select v-model="currentTtsConfigId"
-                            class="px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white max-w-[180px]"
-                            title="选择用于生成的 TTS 服务">
-                            <option value="" disabled>-- 选择 TTS 模型 --</option>
-                            <option v-for="conf in ttsConfigs" :key="conf.id" :value="conf.id">
-                                {{ conf.name }}
-                            </option>
-                        </select>
-                        <button @click="generateAllLines" :disabled="isSequencePlaying"
-                            :class="['px-2 py-2 text-white rounded-lg text-sm font-bold transition-all flex items-center', isGeneratingAll ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700 disabled:opacity-50']">
-                            <span v-if="isGeneratingAll" class="animate-spin mr-2">⏳</span> {{ isGeneratingAll ? '停止生成'
-                            : (selectedLineIndex !== -1 ? '从选中行开始生成' : '一键生成配音(跳过已生成)') }}
-                        </button>
-                        <button @click="clearAllGeneratedAudio" :disabled="isSequencePlaying || isGeneratingAll"
-                            class="px-2 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50 transition-all flex items-center">
-                            清空配音
-                        </button>
-                        <button v-if="!isSequencePlaying" @click="playScriptSequentially"
-                            class="px-2 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 disabled:opacity-50 transition-all">
-                            {{ selectedLineIndex !== -1 ? '▶️ 从选中位置播放' : '▶️ 顺序播放' }}
-                        </button>
-                        <button v-else @click="stopScriptSequentially"
-                            class="px-6 py-2 bg-red-500 text-white rounded-lg text-sm font-bold hover:bg-red-600 transition-all">
-                            停止播放
-                        </button>
-                        <div class="flex-grow"></div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <!-- AI 拆分/分析 -->
+                        <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="font-bold text-xs text-slate-700">AI 深度分析</div>
+                            <select v-model="currentConfigId"
+                                class="px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white w-full"
+                                title="选择用于分析的 LLM 模型">
+                                <option value="" disabled>-- 选择LLM模型 --</option>
+                                <option v-for="conf in llmConfigs" :key="conf.id" :value="conf.id">
+                                    {{ conf.name }}
+                                </option>
+                            </select>
+                            <button @click="analyzeScript"
+                                :class="['w-full px-3 py-2 text-white rounded-lg text-sm font-bold transition-all flex items-center justify-center', isAnalyzingScript ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50']">
+                                <span v-if="isAnalyzingScript" class="animate-spin mr-2">⏳</span>
+                                {{ isAnalyzingScript ? '停止分析' : 'AI 深度分析' }}
+                            </button>
+                        </div>
+
+                        <!-- 插入控制块 -->
+                        <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="font-bold text-xs text-slate-700">插入控制块</div>
+                            <div class="flex flex-wrap gap-2">
+                                <button @click="addDialogueBlock"
+                                    class="px-2 py-2 bg-blue-100 text-blue-600 rounded-lg text-sm font-bold hover:bg-blue-200 transition-all">
+                                    ➕ 插入台词
+                                </button>
+                                <button @click="addBgmBlock"
+                                    class="px-2 py-2 bg-purple-100 text-purple-600 rounded-lg text-sm font-bold hover:bg-purple-200 transition-all">
+                                    ➕ 插入BGM
+                                </button>
+                                <button @click="addBgImageBlock"
+                                    class="px-2 py-2 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-bold hover:bg-emerald-200 transition-all">
+                                    ➕ 插入背景图片
+                                </button>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2 px-2 py-2 bg-white border border-slate-200 rounded-lg">
+                                <label class="text-[10px] font-bold text-slate-500 uppercase whitespace-nowrap">背景图片数量</label>
+                                <input type="number" v-model.number="bgImageCount" min="1" max="30"
+                                    class="w-20 px-2 py-1 border rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                                    title="LLM 将严格插入的 bgImage 块数量" />
+                                <span class="text-[10px] text-slate-400 whitespace-nowrap">张</span>
+                                <span class="text-[10px] text-slate-400 ml-2">（若需关闭，可从Prompt管理中删除背景图片块相关提示词）</span>
+                            </div>
+                        </div>
+
+                        <!-- 配音/生成/播放 -->
+                        <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="font-bold text-xs text-slate-700">配音与播放</div>
+                            <select v-model="currentTtsConfigId"
+                                class="px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white w-full"
+                                title="选择用于生成的 TTS 服务">
+                                <option value="" disabled>-- 选择 TTS 模型 --</option>
+                                <option v-for="conf in ttsConfigs" :key="conf.id" :value="conf.id">
+                                    {{ conf.name }}
+                                </option>
+                            </select>
+
+                            <div class="flex flex-wrap gap-2">
+                                <button @click="generateAllLines" :disabled="isSequencePlaying"
+                                    :class="['flex-1 px-2 py-2 text-white rounded-lg text-sm font-bold transition-all flex items-center justify-center', isGeneratingAll ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700 disabled:opacity-50']">
+                                    <span v-if="isGeneratingAll" class="animate-spin mr-2">⏳</span>
+                                    {{ isGeneratingAll ? '停止生成' : (selectedLineIndex !== -1 ? '从选中行开始生成' : '一键生成配音(跳过已生成)') }}
+                                </button>
+                                <button @click="clearAllGeneratedAudio" :disabled="isSequencePlaying || isGeneratingAll"
+                                    class="px-2 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50 transition-all flex items-center justify-center">
+                                    清空配音
+                                </button>
+                            </div>
+
+                            <div class="flex flex-wrap gap-2">
+                                <button v-if="!isSequencePlaying" @click="playScriptSequentially"
+                                    class="flex-1 px-2 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 disabled:opacity-50 transition-all">
+                                    {{ selectedLineIndex !== -1 ? '▶️ 从选中位置播放' : '▶️ 顺序播放' }}
+                                </button>
+                                <button v-else @click="stopScriptSequentially"
+                                    class="flex-1 px-2 py-2 bg-red-500 text-white rounded-lg text-sm font-bold hover:bg-red-600 transition-all">
+                                    停止播放
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -901,6 +949,77 @@
                                             d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
                                             clip-rule="evenodd" />
                                     </svg></button>
+                            </div>
+
+                            <!-- 背景图片块 -->
+                            <div v-else-if="line.type === 'bgImage'"
+                                :class="['flex flex-col gap-2 p-3 rounded-lg mb-2 transition-all group cursor-pointer border', selectedLineIndex === index ? 'bg-emerald-50 border-emerald-300 shadow-md' : 'bg-emerald-50/50 border-emerald-200', currentSequenceIndex === index ? 'ring-2 ring-green-500' : '']">
+                                <div class="flex flex-wrap items-start gap-3">
+                                    <div
+                                        class="flex flex-col items-center justify-center gap-1 w-8 flex-shrink-0 border-r border-emerald-200 pr-2">
+                                        <button @click.stop="moveLineUp(index)"
+                                            class="text-emerald-400 hover:text-emerald-700 p-0.5 hover:bg-emerald-100 rounded"
+                                            title="上移">▲</button>
+                                        <div class="text-xs font-bold text-emerald-500 select-none">{{ index + 1 }}</div>
+                                        <button @click.stop="moveLineDown(index)"
+                                            class="text-emerald-400 hover:text-emerald-700 p-0.5 hover:bg-emerald-100 rounded"
+                                            title="下移">▼</button>
+                                    </div>
+
+                                    <div class="flex-1 min-w-[260px]">
+                                        <div class="flex items-center justify-between gap-2 mb-2">
+                                            <div class="font-bold text-xs text-emerald-700 uppercase tracking-wider">
+                                                背景图片块
+                                            </div>
+                                            <button @click="removeScriptLine(index)"
+                                                class="text-slate-300 hover:text-red-500 p-2"
+                                                title="删除"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fill-rule="evenodd"
+                                                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                                                    clip-rule="evenodd" />
+                                            </svg></button>
+                                        </div>
+
+                                        <div class="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-3">
+                                            <!-- 图片展示 -->
+                                            <div class="space-y-2">
+                                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                    图片预览
+                                                </div>
+                                                <div class="w-full bg-white border border-emerald-200 rounded-lg overflow-hidden">
+                                                    <img v-if="line.imageUrl"
+                                                        :src="line.imageUrl"
+                                                        class="w-full h-[90px] object-cover bg-white" />
+                                                    <div v-else
+                                                        class="w-full h-[90px] flex items-center justify-center bg-white/50 border-dashed text-[10px] text-emerald-600 border border-emerald-200">
+                                                        未选择
+                                                    </div>
+                                                </div>
+                                                <button @click.stop="openBgImagePicker(index)" type="button"
+                                                    class="w-full px-2 py-1.5 bg-emerald-100 text-emerald-700 text-[11px] border border-emerald-200 rounded hover:bg-emerald-200 transition-all font-bold">
+                                                    选择图片（保存）
+                                                </button>
+                                            </div>
+
+                                            <!-- LLM 提示词展示 -->
+                                            <div class="space-y-2 min-w-0">
+                                                <div class="flex items-center justify-between gap-2">
+                                                    <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                        LLM 图片提示词（中文）
+                                                    </div>
+                                                    <button @click.stop="copyBgImagePrompt(line)" type="button"
+                                                        class="px-2 py-1 bg-white text-emerald-700 text-[11px] border border-emerald-200 rounded hover:bg-emerald-50 transition-all font-bold">
+                                                        复制
+                                                    </button>
+                                                </div>
+                                                <textarea v-model="line.bgImagePrompt"
+                                                    rows="3"
+                                                    class="w-full bg-white border border-emerald-200 rounded px-2 py-1.5 text-[11px] text-emerald-900 focus:ring-0 outline-none resize-none"
+                                                    placeholder="由 AI 分析后生成的中文图片提示词"></textarea>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- 台词块 -->
@@ -1396,7 +1515,7 @@
                     const plainScriptList = scriptList.value.map(script => {
                         const plainLines = (script.data.scriptLines || []).map(l => {
                             // 修复：保存时移除 abortController 和临时状态
-                            const { audioUrl, isGenerating, abortController, ...rest } = l;
+                            const { audioUrl, imageUrl, isGenerating, abortController, ...rest } = l;
                             return rest;
                         });
                         return {
@@ -1629,11 +1748,35 @@
                 const importTxtRef = ref(null);
                 const isExportingProject = ref(false);
                 const exportStatus = ref('');
+                const isGeneratingVideo = ref(false);
+                const videoResolution = ref('1920x1080');
                 let bgmAudioNode = null;
                 let bgmGainNode = null;
                 const playbackProgress = ref(0);
+                const stageBgUrl = ref(''); // 播放/导出时的背景图片展示
+                const bgImageCount = ref(10); // 背景图片块数量（bgImage 对象个数）
+                const stageBgFadePrevUrl = ref(''); // 上一张背景，用于淡入
+                const stageBgFadeStartTs = ref(0);
+                const stageBgFadeDurationMs = 250; // 快速淡入时长
+                const bgImagePickerRef = ref(null);
+                const pendingBgImageLineIndex = ref(-1);
                 let playbackAnimationFrame = null;
                 const isRestoring = ref(false); // 新增：恢复数据时的锁
+
+                const setStageBgUrlWithFade = (url) => {
+                    const next = url || '';
+                    const prev = stageBgUrl.value || '';
+                    if (prev === next) return;
+                    stageBgFadePrevUrl.value = prev;
+                    stageBgFadeStartTs.value = performance.now();
+                    stageBgUrl.value = next;
+                };
+
+                const clearStageBgWithFade = () => {
+                    stageBgFadePrevUrl.value = '';
+                    stageBgFadeStartTs.value = 0;
+                    stageBgUrl.value = '';
+                };
 
                 // 剪辑拖拽状态
                 const draggingTrimState = ref(null);
@@ -1715,6 +1858,26 @@
   - **严禁生成** \`{"type": "sfx", ...}\` 这种独立音效块。音效必须包含在台词对象的 \`sfx\` 字段中。
 
 
+## 7. 背景图片块 (bgImage)
+- **插入时机**: 当场景氛围、地点、时间（白天/夜晚）、或叙事视角发生变化时，请在相邻的台词对象之间插入一个背景图片对象。
+- **插入位置**: 背景图片对象必须出现在“某个台词对象之后”并且“紧接着下一个台词对象之前”（不要插到台词组的内部）。
+- **对象格式**: \`{"type":"bgImage","image_prompt":"..."}\`
+  - \`image_prompt\` 必须是用于生成图片的**中文提示词**，并且必须根据当前小说上下文生成（包含：场景/地点、人物外观与表情（如果画面中需要人物）、衣着风格、光线、画面构图、镜头感、氛围与情绪、画风偏好等）。
+  - **提示词质量**: \`image_prompt\` 只输出中文、不要输出任何 JSON/代码/多余解释，尽量是一段可直接用于“生成图片”的提示文本（越具体越好，避免“可能/也许/看起来”之类不确定词）。
+  - **人物一致性（严格统一）**: 如果 \`image_prompt\` 中出现人物（包括面部/身体/衣着等可识别外观），则必须对每个出现人物给出“统一人物外观设定”，并且同一人物在所有 \`bgImage\` 块中必须保持完全一致：性别、年龄（或年龄段）、服装款式/颜色/材质、发型（发色/发长）、标志性特征/配饰（如有）。为保证一致性，你必须把人物外观设定写成同一种中文短句模板，并且对同名人物要求“逐字不变”（不要同义改写）：
+    - 模板示例：\`人物外观设定：{角色名}（性别=...，年龄=...，服装=...，发型=...，标志=...，主要配色=...）\`
+  - 角色名判定规则：\`{角色名}\` 必须使用当前背景图片所处场景中最近一次出现的 \`dialogue\` 对象的 \`role_name\`（例如“老李”“我”“旁白”等），同一 \`role_name\` 即视为同一人物。
+  - 除非当场景完全不出现该人物，否则不要省略其外观设定；否则可能导致不同图片出现“同一个人物外观不一致”。
+  - 提示词只需要中文，不需要输出图片数据或链接。
+- **字段限制**: \`bgImage\` 对象只输出上述必要字段（至少必须有 \`type\` 与 \`image_prompt\`）。
+- **与第 6 点兼容**: 即使第 6 点列出了两种对象，本规则要求你额外输出 \`type":"bgImage"\` 的第三种对象；最终仍然是一个严格 JSON 数组。
+- **type 字段严格性**: \`type\` 字段必须严格等于 \`bgImage\`（大小写不要改）。
+- **数量约束（严格遵守）**: 请在整个 JSON 数组中严格插入且仅插入 \${bgImageCount} 个 \`type":"bgImage"\` 对象，并且它们必须全部与剧情相关（不能随便凑数）。
+- **开场强制**: 第一个 \`bgImage\` 对象必须出现在“第一个 dialogue 对象之前”，用于视频开场背景；允许开头存在 \`bgm\` 控制块，但 \`bgImage\` 仍必须早于第一个 \`dialogue\`。
+- **分布要求**: 除开场第一张外，其余 \`bgImage\` 必须按照剧情节奏插入在台词之间（至少间隔一个 \`dialogue\`），避免连续出现多个 \`bgImage\`。
+- **例外开场**: 允许第一个 \`bgImage\` 作为开场背景，放在第一个 \`dialogue\` 之前；其余 \`bgImage\` 仍按“某个台词对象之后并紧接着下一个台词对象之前”的相邻插入规则执行。
+
+
 ## 小说原文:
 <novel_content>
 “别接那个电话！”老李猛地按住了我的手，脸色惨白，“那是昨晚值班的小张打来的。”
@@ -1756,6 +1919,8 @@
 
                 // --- 音频引擎与缓存 (Audio Engine & Cache) ---
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                let videoRecordingAudioDestination = null;
+                const getAudioOutputNode = () => videoRecordingAudioDestination || audioContext.destination;
                 const audioBufferCache = new Map();
                 const localFileMap = ref(new Map());
 
@@ -2068,7 +2233,7 @@
                                  projectData.scriptList.forEach(script => {
                                      if (script.data && script.data.scriptLines) {
                                          script.data.scriptLines = script.data.scriptLines.map(lineData => {
-                                             return { trimStart: 0, trimEnd: 1, ...lineData, audioUrl: '', isGenerating: false };
+                                             return { trimStart: 0, trimEnd: 1, ...lineData, imageUrl: '', audioUrl: '', isGenerating: false };
                                          });
                                      }
                                  });
@@ -2081,7 +2246,7 @@
                                      name: '脚本 1',
                                      data: {
                                          rawScript: projectData.rawScript || '',
-                                         scriptLines: (projectData.scriptLines || []).map(lineData => ({ trimStart: 0, trimEnd: 1, ...lineData, audioUrl: '', isGenerating: false })),
+                                         scriptLines: (projectData.scriptLines || []).map(lineData => ({ trimStart: 0, trimEnd: 1, ...lineData, imageUrl: '', audioUrl: '', isGenerating: false })),
                                          rawAnalysisResult: projectData.rawAnalysisResult || '',
                                          characters: projectData.characters || []
                                      }
@@ -2130,12 +2295,18 @@
                                  for (const script of scriptList.value) {
                                      const lines = script.data.scriptLines || [];
                                      for (const line of lines) {
-                                         if (line.type === 'dialogue') {
+                                        if (line.type === 'dialogue') {
                                              const audioKey = `line_audio_${line.id}`;
                                              const blob = await loadAssetFromDB(audioKey);
                                              if (blob) {
                                                  line.audioUrl = URL.createObjectURL(blob);
                                              }
+                                        } else if (line.type === 'bgImage') {
+                                            const bgKey = line.bgImageAssetKey || `bgImage_${line.id}`;
+                                            const blob = await loadAssetFromDB(bgKey);
+                                            if (blob) {
+                                                line.imageUrl = URL.createObjectURL(blob);
+                                            }
                                          }
                                      }
                                  }
@@ -3186,7 +3357,7 @@
                             }
 
                             // Connect to gain then destination
-                            lastNode.connect(dialogueGain).connect(audioContext.destination);
+                            lastNode.connect(dialogueGain).connect(getAudioOutputNode());
                             dialogueSource.playbackRate.value = speed;
 
                             const now = audioContext.currentTime + 0.05; // Slight delay for sync
@@ -3207,7 +3378,7 @@
                                     const sGain = audioContext.createGain();
                                     const finalSfxVol = (line.sfxVolume ?? 0.5) * (libVolume ?? 1.0);
                                     sGain.gain.setValueAtTime(finalSfxVol, now);
-                                    sSrc.connect(sGain).connect(audioContext.destination);
+                                    sSrc.connect(sGain).connect(getAudioOutputNode());
 
                                     const relativeStart = absSfxTime - absStart;
                                     const sOffset = buffer.duration * sfxTrimStart;
@@ -3407,12 +3578,23 @@
                                 blob = await loadAssetFromDB(`line_audio_${line.id}`);
                             }
 
+                            if (!blob && line.type === 'bgImage') {
+                                const bgKey = line.bgImageAssetKey || `bgImage_${line.id}`;
+                                blob = await loadAssetFromDB(bgKey);
+                            }
+
                             if (blob) {
                                 try {
-                                    line.audioBase64 = await blobToBase64(blob);
-                                    line.audioUrl = ''; // 导出时不保存 blob URL
+                                    if (line.type === 'dialogue') {
+                                        line.audioBase64 = await blobToBase64(blob);
+                                        line.audioUrl = ''; // 导出时不保存 blob URL
+                                    } else if (line.type === 'bgImage') {
+                                        line.imageBase64 = await blobToBase64(blob);
+                                        line.imageMimeType = blob.type;
+                                        line.imageUrl = ''; // 导出时不保存 blob URL
+                                    }
                                 } catch (e) {
-                                    console.warn('导出音频失败:', line.id, e);
+                                    console.warn('导出资源失败:', line.id, e);
                                 }
                             }
                             }
@@ -3594,6 +3776,18 @@
                                                 line.audioUrl = URL.createObjectURL(blob);
                                                 delete line.audioBase64;
                                             } catch (err) { console.warn('Audio restore failed', err); }
+                                        }
+                                        if (line.type === 'bgImage' && line.imageBase64) {
+                                            try {
+                                                const res = await fetch(line.imageBase64);
+                                                const blob = await res.blob();
+                                                const bgKey = line.bgImageAssetKey || `bgImage_${line.id}`;
+                                                line.bgImageAssetKey = bgKey;
+                                                assetsToSave.push({ key: bgKey, blob: blob });
+                                                line.imageUrl = URL.createObjectURL(blob);
+                                                delete line.imageBase64;
+                                                // imageMimeType 将由 blob.type 自动带入
+                                            } catch (err) { console.warn('Image restore failed', err); }
                                         }
                                     }
                                 }
@@ -4174,6 +4368,25 @@
                     }
                 };
 
+                const addBgImageBlock = () => {
+                    const newId = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+                    const newBlock = {
+                        id: newId,
+                        type: 'bgImage',
+                        bgImagePrompt: '',
+                        // selected background will be saved into assets store and restored via bgImageAssetKey
+                        bgImageAssetKey: '',
+                        imageUrl: ''
+                    };
+                    if (selectedLineIndex.value !== -1 && selectedLineIndex.value < scriptLines.value.length) {
+                        scriptLines.value.splice(selectedLineIndex.value + 1, 0, newBlock);
+                        selectedLineIndex.value++;
+                    } else {
+                        scriptLines.value.push(newBlock);
+                        selectedLineIndex.value = scriptLines.value.length - 1;
+                    }
+                };
+
                 const addDialogueBlock = () => {
                     const newBlock = {
                         id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
@@ -4211,6 +4424,55 @@
                     }
                 };
 
+                const openBgImagePicker = (lineIndex) => {
+                    pendingBgImageLineIndex.value = lineIndex;
+                    if (bgImagePickerRef.value) bgImagePickerRef.value.click();
+                };
+
+                const handleBgImageFileChange = async (event) => {
+                    const file = event.target.files && event.target.files[0];
+                    const lineIndex = pendingBgImageLineIndex.value;
+                    pendingBgImageLineIndex.value = -1;
+                    event.target.value = '';
+                    if (!file) return;
+
+                    const line = scriptLines.value[lineIndex];
+                    if (!line || line.type !== 'bgImage') return;
+
+                    const assetKey = line.bgImageAssetKey || `bgImage_${line.id}`;
+                    line.bgImageAssetKey = assetKey;
+                    line.imageUrl = URL.createObjectURL(file);
+
+                    try {
+                        await saveAssetToDB(assetKey, file);
+                    } catch (e) {
+                        console.error('Failed to save bgImage asset:', e);
+                        alert('保存背景图片失败，请重试。');
+                    }
+
+                    triggerAutoSave();
+                };
+
+                const copyBgImagePrompt = async (line) => {
+                    const text = line?.bgImagePrompt || '';
+                    if (!text) return;
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        alert('已复制背景图片提示词');
+                    } catch (e) {
+                        // Fallback for environments without clipboard permission
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        alert('已复制背景图片提示词');
+                    }
+                };
+
                 const autoResizeTextarea = (event) => {
                     const el = event.target;
                     el.style.height = 'auto';
@@ -4230,6 +4492,9 @@
                 const stopScriptSequentially = () => {
                     isSequencePlaying.value = false;
                     currentSequenceIndex.value = -1;
+                    if (!isGeneratingVideo.value) stageBgUrl.value = '';
+                    stageBgFadePrevUrl.value = '';
+                    stageBgFadeStartTs.value = 0;
                     // Stop dialogue audio
                     if (dialogueSource) {
                         try { dialogueSource.stop(); } catch (e) { }
@@ -4295,7 +4560,7 @@
                         bgmGainNode.gain.value = 0;
                         bgmGainNode.gain.linearRampToValueAtTime(finalVolume, audioContext.currentTime + 2);
 
-                        bgmAudioNode.connect(bgmGainNode).connect(audioContext.destination);
+                        bgmAudioNode.connect(bgmGainNode).connect(getAudioOutputNode());
                         bgmAudioNode.start(0, bgmAudioNode.loopStart);
                     } catch (e) {
                         console.error(`Failed to load or play BGM ${bgmLibItem.filename}:`, e);
@@ -4307,6 +4572,28 @@
                     stopScriptSequentially();
                     isSequencePlaying.value = true;
                     const startIndex = selectedLineIndex.value !== -1 ? selectedLineIndex.value : 0;
+
+                    // --- bgImage Pre-scan Logic ---
+                    if (startIndex > 0) {
+                        let lastBgImageLine = null;
+                        for (let i = startIndex - 1; i >= 0; i--) {
+                            const line = scriptLines.value[i];
+                            if (line.type === 'bgImage') {
+                                lastBgImageLine = line;
+                                break;
+                            }
+                        }
+                        if (lastBgImageLine && lastBgImageLine.imageUrl) {
+                            setStageBgUrlWithFade(lastBgImageLine.imageUrl);
+                        }
+                    } else {
+                        // 兜底：从开头播放但之前没有 bgImage，则尝试使用第一个 bgImage 作为开场背景
+                        const firstBgImageLine = scriptLines.value.find(l => l.type === 'bgImage');
+                        if (firstBgImageLine && firstBgImageLine.imageUrl) {
+                            setStageBgUrlWithFade(firstBgImageLine.imageUrl);
+                        }
+                    }
+                    // --- End bgImage Pre-scan ---
 
                     // --- BGM Pre-scan Logic ---
                     if (startIndex > 0) {
@@ -4371,6 +4658,8 @@
                                     bgmGainNode = null;
                                 }
                             }
+                        } else if (line.type === 'bgImage') {
+                            setStageBgUrlWithFade(line.imageUrl || '');
                         } else { // 'dialogue'
                             if (!line.audioUrl) {
                                 // 跳过未生成的台词
@@ -4391,6 +4680,463 @@
 
                     // Reset when done or stopped
                     stopScriptSequentially();
+                };
+
+                // --- 视频生成（MP4 离线合成） ---
+                const generateVideo = async () => {
+                    const dialogueLines = scriptLines.value.filter(l => l.type === 'dialogue');
+                    if (dialogueLines.length === 0) return alert('脚本为空');
+
+                    if (dialogueLines.some(l => !l.audioUrl)) {
+                        if (!confirm('部分台词尚未生成音频，导出视频时将跳过未生成的台词。确定继续吗？')) return;
+                    }
+
+                    if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') {
+                        return alert('当前浏览器不支持 WebCodecs API，无法快速导出视频。请使用最新版 Chrome 或 Edge。');
+                    }
+                    if (typeof Mp4Muxer === 'undefined') {
+                        return alert('缺少 Mp4Muxer 库，无法导出 MP4。');
+                    }
+
+                    isGeneratingVideo.value = true;
+                    exportStatus.value = '准备素材...';
+
+                    try {
+                        const assets = { dialogues: {}, sfx: {}, bgm: {} };
+
+                        // 1. 加载所有台词音频
+                        for (const line of dialogueLines) {
+                            if (line.audioUrl) assets.dialogues[line.id] = await loadAudioBuffer(line.audioUrl);
+                        }
+
+                        // 2. 加载用到的音效
+                        const usedSfxNames = new Set();
+                        scriptLines.value.forEach(l => { if (l.sfx) l.sfx.forEach(s => usedSfxNames.add(s.name)); });
+                        for (const name of usedSfxNames) {
+                            const item = sfxLibrary.value.find(s => s.name === name);
+                            if (item && item.filename) {
+                                try { assets.sfx[name] = await loadAudioBuffer(item.filename); } catch (e) { }
+                            }
+                        }
+
+                        // 3. 加载用到的 BGM
+                        const usedBgmNames = new Set();
+                        scriptLines.value.forEach(l => { if (l.type === 'bgm' && l.action === 'play') usedBgmNames.add(l.bgmName); });
+                        for (const name of usedBgmNames) {
+                            const item = bgmLibrary.value.find(b => b.name === name);
+                            if (item && item.filename) {
+                                try { assets.bgm[name] = await loadAudioBuffer(item.filename); } catch (e) { }
+                            }
+                        }
+
+                        // 4. 加载背景图片
+                        const bgUrls = Array.from(new Set(
+                            scriptLines.value.filter(l => l.type === 'bgImage' && l.imageUrl).map(l => l.imageUrl)
+                        ));
+                        const bgImageCache = new Map();
+                        for (const url of bgUrls) {
+                            const img = new Image();
+                            img.crossOrigin = 'anonymous';
+                            await new Promise((resolve) => {
+                                img.onload = resolve;
+                                img.onerror = resolve;
+                                img.src = url;
+                            });
+                            bgImageCache.set(url, img);
+                        }
+
+                        // 5. 计算时间轴 (同时用于音频和视频)
+                        let currentTime = 0;
+                        const events = [];
+                        const bgmSegments = [];
+                        let currentBgm = null;
+                        
+                        const visualTimeline = [];
+                        let currentBgUrl = '';
+                        let lastBgChangeTime = 0;
+
+                        // 初始化首个背景
+                        const firstBgLine = scriptLines.value.find(l => l.type === 'bgImage' && l.imageUrl);
+                        if (firstBgLine) currentBgUrl = firstBgLine.imageUrl;
+
+                        for (const line of scriptLines.value) {
+                            if (line.type === 'bgm') {
+                                if (line.action === 'play') {
+                                    if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime });
+                                    currentBgm = { name: line.bgmName, start: currentTime, volume: line.volume };
+                                } else if (line.action === 'stop') {
+                                    if (currentBgm) {
+                                        bgmSegments.push({ ...currentBgm, end: currentTime });
+                                        currentBgm = null;
+                                    }
+                                }
+                            } else if (line.type === 'bgImage') {
+                                if (line.imageUrl && line.imageUrl !== currentBgUrl) {
+                                    if (currentTime > lastBgChangeTime) {
+                                        visualTimeline.push({
+                                            url: currentBgUrl,
+                                            start: lastBgChangeTime,
+                                            end: currentTime
+                                        });
+                                    }
+                                    currentBgUrl = line.imageUrl;
+                                    lastBgChangeTime = currentTime;
+                                }
+                            } else if (line.type === 'dialogue') {
+                                const buffer = assets.dialogues[line.id];
+                                if (buffer) {
+                                    const trimStart = line.trimStart || 0;
+                                    const trimEnd = line.trimEnd || 1;
+                                    const playDuration = buffer.duration * (trimEnd - trimStart);
+                                    const speed = line.speed || 1.0;
+                                    const effectiveDuration = playDuration / speed;
+
+                                    currentTime += 0.05;
+                                    events.push({ type: 'dialogue', time: currentTime, buffer: buffer, line: line, trimStart, trimEnd, playDuration, speed });
+                                    currentTime += effectiveDuration;
+                                }
+                                currentTime += (line.break_duration || 0);
+                            }
+                        }
+                        if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + 2 }); // BGM 尾部淡出
+                        if (currentTime > lastBgChangeTime) {
+                            visualTimeline.push({
+                                url: currentBgUrl,
+                                start: lastBgChangeTime,
+                                end: currentTime + 1 // 视频多留1秒结尾
+                            });
+                        }
+                        
+                        const totalDuration = currentTime + 1;
+                        const sampleRate = 44100;
+                        const offlineCtx = new OfflineAudioContext(2, totalDuration * sampleRate, sampleRate);
+
+                        // 调度 BGM
+                        bgmSegments.forEach(seg => {
+                            const buffer = assets.bgm[seg.name];
+                            if (buffer) {
+                                const libItem = bgmLibrary.value.find(b => b.name === seg.name);
+                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
+                                const finalVol = seg.volume * libVol;
+                                const src = offlineCtx.createBufferSource();
+                                src.buffer = buffer;
+                                src.loop = true;
+                                const trimStart = libItem?.trimStart ?? 0;
+                                const trimEnd = libItem?.trimEnd ?? 1;
+                                src.loopStart = buffer.duration * trimStart;
+                                src.loopEnd = buffer.duration * trimEnd;
+                                const gain = offlineCtx.createGain();
+                                gain.gain.setValueAtTime(0, seg.start);
+                                gain.gain.linearRampToValueAtTime(finalVol, seg.start + 2);
+                                gain.gain.setValueAtTime(finalVol, Math.max(seg.start + 2, seg.end - 2));
+                                gain.gain.linearRampToValueAtTime(0, seg.end);
+                                src.connect(gain).connect(offlineCtx.destination);
+                                src.start(seg.start, src.loopStart);
+                                src.stop(seg.end);
+                            }
+                        });
+
+                        // 调度台词和音效
+                        events.forEach(evt => {
+                            const dSrc = offlineCtx.createBufferSource();
+                            dSrc.buffer = evt.buffer;
+                            dSrc.playbackRate.value = evt.speed;
+                            const dGain = offlineCtx.createGain();
+                            const char = characters.value.find(c => c.name === evt.line.role);
+                            const charVol = char ? (char.volume ?? 1.0) : 1.0;
+                            dGain.gain.value = (evt.line.dialogueVolume ?? 1.0) * charVol;
+
+                            const offset = evt.buffer.duration * evt.trimStart;
+                            const duration = evt.playDuration;
+
+                            let lastNode = dSrc;
+                            if (evt.line.filter) {
+                                const fConfig = filterLibrary.value.find(f => f.name === evt.line.filter);
+                                if (fConfig) {
+                                    if (fConfig.type === 'distortion') {
+                                        const ws = offlineCtx.createWaveShaper();
+                                        ws.curve = makeDistortionCurve(fConfig.gain);
+                                        ws.oversample = '4x';
+                                        lastNode.connect(ws);
+                                        lastNode = ws;
+                                    } else {
+                                        const bq = offlineCtx.createBiquadFilter();
+                                        bq.type = fConfig.type;
+                                        bq.frequency.value = fConfig.frequency;
+                                        bq.Q.value = fConfig.Q;
+                                        lastNode.connect(bq);
+                                        lastNode = bq;
+                                    }
+                                }
+                            }
+                            lastNode.connect(dGain).connect(offlineCtx.destination);
+                            dSrc.start(evt.time, offset, duration);
+
+                            if (evt.line.sfx) {
+                                evt.line.sfx.forEach(s => {
+                                    const sBuffer = assets.sfx[s.name];
+                                    if (sBuffer) {
+                                        const originalDuration = evt.buffer.duration;
+                                        const absStart = originalDuration * evt.trimStart;
+                                        const absEnd = originalDuration * evt.trimEnd;
+                                        const trimmedDuration = absEnd - absStart;
+                                        const pos = parseFloat(s.position) || 0;
+                                        const absSfxTime = absStart + (trimmedDuration * pos);
+
+                                        if (absSfxTime >= absStart && absSfxTime <= absEnd) {
+                                            const sSrc = offlineCtx.createBufferSource();
+                                            sSrc.buffer = sBuffer;
+                                            const sGain = offlineCtx.createGain();
+                                            const libItem = sfxLibrary.value.find(l => l.name === s.name);
+                                            const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
+                                            const scriptVol = evt.line.sfxVolume ?? 0.5;
+                                            sGain.gain.value = scriptVol * libVol;
+                                            const sTrimStart = libItem?.trimStart ?? 0;
+                                            const sTrimEnd = libItem?.trimEnd ?? 1;
+                                            const sOffset = sBuffer.duration * sTrimStart;
+                                            const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
+                                            sSrc.connect(sGain).connect(offlineCtx.destination);
+                                            const relativeStart = absSfxTime - absStart;
+                                            sSrc.start(evt.time + relativeStart / evt.speed, sOffset, sDuration);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+
+                        exportStatus.value = '合成音频...';
+                        const renderedBuffer = await offlineCtx.startRendering();
+
+                        exportStatus.value = '生成视频轨道...';
+                        
+                        const fps = 30;
+                        let [width, height] = videoResolution.value.split('x').map(Number);
+                        
+                        // Ensure width and height are even numbers (required by many hardware encoders)
+                        width = width % 2 === 0 ? width : width + 1;
+                        height = height % 2 === 0 ? height : height + 1;
+                        
+                        const muxer = new Mp4Muxer.Muxer({
+                            target: new Mp4Muxer.ArrayBufferTarget(),
+                            video: { codec: 'avc', width, height },
+                            audio: { codec: 'aac', sampleRate: 44100, numberOfChannels: 2 },
+                            fastStart: 'in-memory'
+                        });
+
+                        let videoEncoder, audioEncoder;
+
+                        const encodeErrorPromise = new Promise((_, reject) => {
+                            videoEncoder = new VideoEncoder({
+                                output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+                                error: e => { 
+                                    console.error('VideoEncoder error:', e); 
+                                    reject(new Error('视频编码错误: ' + e.message)); 
+                                }
+                            });
+
+                            audioEncoder = new AudioEncoder({
+                                output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+                                error: e => { 
+                                    console.error('AudioEncoder error:', e); 
+                                    reject(new Error('音频编码错误: ' + e.message)); 
+                                }
+                            });
+                        });
+
+                        // Dynamically choose codec profile based on resolution.                        // 1080p (1920x1080 or 1080x1920) typically needs Level 4.2 (avc1.64002A) or Level 4.0.
+                        let codecString = 'avc1.4d002a'; // Main Profile, Level 4.2 (1080p 60fps)
+                        
+                        const config = {
+                            codec: codecString,
+                            width, height,
+                            bitrate: 5_000_000,
+                            framerate: fps,
+                            hardwareAcceleration: "prefer-hardware"
+                        };
+
+                        try {
+                            const support = await VideoEncoder.isConfigSupported(config);
+                            if (!support.supported) {
+                                console.warn("Video configuration not supported by hardware, trying software/baseline fallback...");
+                                config.codec = 'avc1.42002a'; // Fallback to Baseline Profile Level 4.2
+                                config.hardwareAcceleration = "no-preference";
+                                
+                                const fallbackSupport = await VideoEncoder.isConfigSupported(config);
+                                if (!fallbackSupport.supported) {
+                                    // Extreme fallback
+                                    config.codec = 'avc1.42001f'; // Baseline 3.1
+                                }
+                            }
+                        } catch (e) {
+                            console.warn("Failed to check video config support, using default", e);
+                            config.codec = 'avc1.42002a'; // Fallback to Baseline Profile Level 4.2 on error
+                            config.hardwareAcceleration = "no-preference";
+                        }
+
+                        videoEncoder.configure(config);
+                        audioEncoder.configure({
+                            codec: 'mp4a.40.2',
+                            sampleRate: 44100,
+                            numberOfChannels: 2,
+                            bitrate: 128000
+                        });
+
+                        // Yield to the event loop to allow the encoders' configuration tasks to complete.
+                        await new Promise(r => setTimeout(r, 0));
+
+                        const renderVideoPromise = async () => {
+                            // 绘制视频帧
+                            const offscreenCanvas = new OffscreenCanvas(width, height);
+                            const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
+                            const totalFrames = Math.ceil(totalDuration * fps);
+                            
+                            const drawCover = (ctx, img, cw, ch) => {
+                                const scale = Math.max(cw / img.width, ch / img.height);
+                                const dw = img.width * scale;
+                                const dh = img.height * scale;
+                                const dx = (cw - dw) / 2;
+                                const dy = (ch - dh) / 2;
+                                ctx.drawImage(img, dx, dy, dw, dh);
+                            };
+
+                            let currentTimelineIndex = 0;
+                            const fadeFrames = Math.floor(0.25 * fps); // 250ms fade
+                            let fadeCounter = 0;
+                            let prevBgUrl = '';
+
+                            for (let i = 0; i < totalFrames; i++) {
+                                const t = i / fps;
+                                
+                                while (currentTimelineIndex < visualTimeline.length - 1 && t >= visualTimeline[currentTimelineIndex].end) {
+                                    prevBgUrl = visualTimeline[currentTimelineIndex].url;
+                                    currentTimelineIndex++;
+                                    fadeCounter = fadeFrames;
+                                }
+                                
+                                const stage = visualTimeline[currentTimelineIndex];
+                                const currentUrl = stage ? stage.url : '';
+                                
+                                offscreenCtx.fillStyle = '#000';
+                                offscreenCtx.fillRect(0, 0, width, height);
+
+                                let alpha = 1;
+                                if (fadeCounter > 0 && prevBgUrl !== currentUrl) {
+                                    alpha = 1 - (fadeCounter / fadeFrames);
+                                    fadeCounter--;
+                                    if (bgImageCache.has(prevBgUrl)) {
+                                        const img = bgImageCache.get(prevBgUrl);
+                                        offscreenCtx.globalAlpha = 1 - alpha;
+                                        drawCover(offscreenCtx, img, width, height);
+                                    }
+                                }
+
+                                if (currentUrl && bgImageCache.has(currentUrl)) {
+                                    const img = bgImageCache.get(currentUrl);
+                                    offscreenCtx.globalAlpha = alpha;
+                                    drawCover(offscreenCtx, img, width, height);
+                                }
+                                
+                                offscreenCtx.globalAlpha = 1;
+
+                                while (videoEncoder.encodeQueueSize > 30) {
+                                    if (videoEncoder.state !== 'configured') {
+                                        break;
+                                    }
+                                    await new Promise(r => setTimeout(r, 10));
+                                }
+                                
+                                if (i % 30 === 0) {
+                                    exportStatus.value = `编码视频 ${Math.round((i / totalFrames) * 100)}%`;
+                                    await new Promise(r => setTimeout(r, 0));
+                                }
+
+                                const frame = new VideoFrame(offscreenCanvas, { timestamp: i * 1000000 / fps });
+                                if (videoEncoder.state !== 'configured') {
+                                    frame.close();
+                                    throw new Error('视频编码器状态异常 (' + videoEncoder.state + ')。可能是分辨率或编码配置不受当前浏览器支持。');
+                                }
+                                videoEncoder.encode(frame, { keyFrame: i % fps === 0 });
+                                frame.close();
+                            }
+                            
+                            if (videoEncoder.state === 'configured') {
+                                await videoEncoder.flush();
+                                videoEncoder.close();
+                            }
+                        };
+
+                        const renderAudioPromise = async () => {
+                            exportStatus.value = '编码音频...';
+                            const numberOfChannels = renderedBuffer.numberOfChannels;
+                            const length = renderedBuffer.length;
+                            
+                            const chunkSize = 1024;
+                            for (let i = 0; i < length; i += chunkSize) {
+                                const end = Math.min(i + chunkSize, length);
+                                const chunkLength = end - i;
+                                
+                                const chunkPlanarData = new Float32Array(chunkLength * numberOfChannels);
+                                for(let c = 0; c < numberOfChannels; c++) {
+                                    const sourceChannelData = renderedBuffer.getChannelData(c);
+                                    chunkPlanarData.set(sourceChannelData.subarray(i, end), c * chunkLength);
+                                }
+
+                                const audioData = new AudioData({
+                                    format: 'f32-planar',
+                                    sampleRate: 44100,
+                                    numberOfFrames: chunkLength,
+                                    numberOfChannels: 2,
+                                    timestamp: (i / 44100) * 1000000,
+                                    data: chunkPlanarData
+                                });
+                                
+                                while (audioEncoder.encodeQueueSize > 50) {
+                                    if (audioEncoder.state !== 'configured') {
+                                        break;
+                                    }
+                                    await new Promise(r => setTimeout(r, 10));
+                                }
+                                if (audioEncoder.state !== 'configured') {
+                                    audioData.close();
+                                    throw new Error('音频编码器状态异常 (' + audioEncoder.state + ')');
+                                }
+                                audioEncoder.encode(audioData);
+                                audioData.close();
+                            }
+                            
+                            if (audioEncoder.state === 'configured') {
+                                await audioEncoder.flush();
+                                audioEncoder.close();
+                            }
+                        };
+
+                        // 运行编码并捕获任何可能发生的抛错
+                        await Promise.race([
+                            Promise.all([renderVideoPromise(), renderAudioPromise()]),
+                            encodeErrorPromise
+                        ]);
+
+                        exportStatus.value = '封装 MP4...';
+                        muxer.finalize();
+                        const mp4Buffer = muxer.target.buffer;
+                        const blob = new Blob([mp4Buffer], { type: 'video/mp4' });
+                        
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `Unitale_导出视频_${Date.now()}.mp4`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                    } catch (e) {
+                        console.error('Video generation failed:', e);
+                        alert('导出视频失败: ' + e.message);
+                    } finally {
+                        isGeneratingVideo.value = false;
+                        exportStatus.value = '';
+                    }
                 };
 
                 const analyzeScript = async () => {
@@ -4452,7 +5198,29 @@
                         .replace(/\${filterSection}/g, filterSection)
                         .replace(/\${bgmExampleLine}/g, bgmExampleLine)
                         .replace(/\${sfxExample}/g, sfxExample)
-                        .replace(/\${rawScript}/g, rawScript.value);
+                        .replace(/\${rawScript}/g, rawScript.value)
+                        .replace(/\${bgImageCount}/g, bgImageCount.value);
+
+                    // 兼容：当用户启用“自定义 Prompt”时，补充最低约束与数量约束（只添加，不删减原有 prompt）。
+                    if (useCustomPrompt.value) {
+                        if (!finalPrompt.includes('bgImage')) {
+                            finalPrompt += `
+
+## 背景图片块 (bgImage)
+- 需要在相邻的台词对象之间插入：\`{"type":"bgImage","image_prompt":"..."}\`
+- \`image_prompt\` 必须为用于生成图片的中文提示词，并且要根据当前小说上下文生成。
+- \`type\` 字段必须严格等于 \`bgImage\`。
+`;
+                        }
+
+                        finalPrompt += `
+
+## 背景图片块数量约束（严格遵守）
+- 请在整个 JSON 数组中严格插入且仅插入 ${bgImageCount.value} 个 \`type":"bgImage"\` 对象。
+- 第一个 \`bgImage\` 对象必须出现在“第一个 dialogue 对象之前”，用于视频开场背景；允许开头存在 \`bgm\` 控制块。
+- 除开场第一张外，其余 \`bgImage\` 必须按剧情节奏插入在台词之间（至少间隔一个 \`dialogue\`），避免连续出现多个 \`bgImage\`。
+`;
+                    }
 
                     try {
                         const cfg = currentConfig.value;
@@ -4587,7 +5355,12 @@
                                     // BGM fields
                                     action: item.action || 'play',
                                     volume: 1.0,
-                                    bgmName: matchedBgmName
+                                    bgmName: matchedBgmName,
+
+                                    // bgImage fields (background-image block)
+                                    bgImagePrompt: item.image_prompt || item.bgImagePrompt || item.imagePrompt || item.prompt || '',
+                                    bgImageAssetKey: '',
+                                    imageUrl: ''
                                 };
                             });
                         } else {
@@ -4917,17 +5690,22 @@
                     send, stopGeneration, clearAll,
 
                     playbackProgress, // Export for template
+                    stageBgUrl,
+                    bgImageCount,
+                    bgImagePickerRef,
+                    isGeneratingVideo,
 
                     // Script Actions
                     rawScript, scriptLines, splitScript, removeScriptLine, autoResizeTextarea, analyzeScript, isAnalyzingScript, rawAnalysisResult,
-                    addBgmBlock, addDialogueBlock, selectedLineIndex,
+                    addBgmBlock, addDialogueBlock, addBgImageBlock, selectedLineIndex,
                     drawWaveform, startDragTrim, // Exported for template
                     generateAllLines, isGeneratingAll, clearAllGeneratedAudio,
                     moveLineUp, moveLineDown,
                     toggleLineSelection,
+                    openBgImagePicker, handleBgImageFileChange, copyBgImagePrompt,
                     exportScriptState, triggerImport, handleImportFile, importFileRef, exportAudio, isExportingAudio,
                     exportSRT, triggerImportTxt, handleImportTxt, importTxtRef,
-                    isExportingProject, exportStatus,
+                    isExportingProject, exportStatus, videoResolution,
                     playScriptSequentially, stopScriptSequentially, isSequencePlaying, currentSequenceIndex,
                     lineRefs,
                     scriptListContainer,
@@ -4937,6 +5715,7 @@
                     customPromptTemplate, useCustomPrompt, savePrompt, resetPrompt,
                     customVoicePromptTemplate, useCustomVoicePrompt, saveVoicePrompt, resetVoicePrompt,
                     customQwenVoiceTextTemplate, useCustomQwenVoiceText, saveQwenVoiceText, resetQwenVoiceText,
+                    generateVideo,
                 };
             }
         }).mount('#app');
