@@ -45,17 +45,17 @@
         }
 
         #app {
-            background-color: rgba(255, 255, 255, 0.75) !important;
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.4);
+            background-color: rgba(255, 255, 255, 0.58) !important;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.28);
         }
 
         /* 内部组件半透明化，增强层次感 */
         #app .bg-white,
         #app .bg-slate-50,
         #app .bg-slate-100 {
-            background-color: rgba(255, 255, 255, 0.5) !important;
+            background-color: rgba(255, 255, 255, 0.34) !important;
         }
 
         input,
@@ -68,9 +68,6 @@
 
 <body class="p-4 md:p-8">
     <div id="app" class="w-full max-w-[96%] mx-auto p-6 rounded-2xl shadow-2xl">
-        <!-- 视频/播放用背景层：不修改原有 body 随机背景 CSS，仅在有 bgImage 块时覆盖显示 -->
-        <div v-if="stageBgUrl" class="fixed inset-0 -z-10 bg-center bg-cover transition-opacity duration-300"
-            :style="{ backgroundImage: `url(${stageBgUrl})` }"></div>
         <header class="mb-6 flex justify-between items-end">
             <div>
                 <h1 class="text-2xl font-bold text-slate-800">Unitale AI <span class="text-blue-600">1.5</span></h1>
@@ -847,7 +844,7 @@
                             </div>
                             <div class="flex flex-wrap items-center gap-2 px-2 py-2 bg-white border border-slate-200 rounded-lg">
                                 <label class="text-[10px] font-bold text-slate-500 uppercase whitespace-nowrap">背景图片数量</label>
-                                <input type="number" v-model.number="bgImageCount" min="1" max="30"
+                                <input type="number" v-model.number="bgImageCount" min="0" max="100"
                                     class="w-20 px-2 py-1 border rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
                                     title="LLM 将严格插入的 bgImage 块数量" />
                                 <span class="text-[10px] text-slate-400 whitespace-nowrap">张</span>
@@ -894,7 +891,14 @@
                 </div>
 
                 <!-- 拆分结果列表 -->
-                <div v-if="scriptLines.length > 0" class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <div v-if="scriptLines.length > 0"
+                    class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm"
+                    :style="stageBgUrl ? {
+                        backgroundImage: `linear-gradient(to bottom, rgba(255,255,255,0.76), rgba(255,255,255,0.58)), url(${stageBgUrl})`,
+                        backgroundRepeat: 'no-repeat, no-repeat',
+                        backgroundPosition: 'center center, center center',
+                        backgroundSize: '100% 100%, contain'
+                    } : {}">
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-sm font-bold text-slate-700">2. 脚本台词列表 ({{ scriptLines.length }} 行)</h3>
                     </div>
@@ -905,7 +909,7 @@
 
                             <!-- BGM 控制块 -->
                             <div v-if="line.type === 'bgm'"
-                                :class="['flex items-center gap-3 p-3 rounded-lg border mb-2 transition-all', selectedLineIndex === index ? 'border-purple-500 bg-purple-50 shadow-md' : 'bg-purple-50/50 border-purple-200', currentSequenceIndex === index ? 'ring-2 ring-green-500' : '']">
+                                :class="['flex flex-wrap items-center gap-3 p-3 rounded-lg border mb-2 transition-all', selectedLineIndex === index ? 'border-purple-500 bg-purple-50 shadow-md' : 'bg-purple-50/50 border-purple-200', currentSequenceIndex === index ? 'ring-2 ring-green-500' : '']">
                                 <div
                                     class="flex flex-col items-center justify-center gap-1 w-8 flex-shrink-0 border-r border-purple-200 pr-2">
                                     <button @click.stop="moveLineUp(index)"
@@ -925,30 +929,31 @@
                                     <option value="play">▶ 播放</option>
                                     <option value="stop">停止</option>
                                 </select>
-                                <div class="flex-1 flex items-center gap-2">
+                                <div class="flex-1 min-w-[220px] flex items-center gap-2">
                                     <select v-if="line.action === 'play'" v-model="line.bgmName"
                                         class="flex-1 px-2 py-1.5 text-xs border rounded bg-white focus:ring-1 focus:ring-purple-500 outline-none font-bold text-purple-700">
                                         <option value="" disabled>-- 选择背景音乐 --</option>
-                                        <option v-for="s in bgmLibrary" :key="s.id" :value="s.name">{{ s.name }}
-                                        </option>
+                                        <option v-for="s in bgmLibrary" :key="s.id" :value="s.name">{{ s.name }}</option>
                                     </select>
-                                    <div v-else class="flex-1 text-xs text-slate-400 italic py-1.5 px-2">停止当前播放的所有背景音乐
-                                    </div>
-                                    <div v-if="line.action === 'play'" class="w-24 flex-shrink-0 space-y-1">
-                                        <div
-                                            class="text-[10px] font-bold text-slate-400 uppercase text-center leading-tight">
-                                            BGM音量</div>
-                                        <input type="range" v-model="line.volume" min="0" max="2" step="0.05"
-                                            class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-purple-600">
+                                    <div v-else class="flex-1 text-xs text-slate-400 italic py-1.5 px-2">
+                                        停止当前播放的所有背景音乐
                                     </div>
                                 </div>
+                                <div v-if="line.action === 'play'" class="w-28 flex-shrink-0 space-y-1">
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase text-center leading-tight">
+                                        BGM音量
+                                    </div>
+                                    <input type="range" v-model="line.volume" min="0" max="2" step="0.05"
+                                        class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-purple-600">
+                                </div>
                                 <button @click="removeScriptLine(index)"
-                                    class="text-slate-300 hover:text-red-500 p-2"><svg class="h-4 w-4"
-                                        xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    class="text-slate-300 hover:text-red-500 p-2">
+                                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                                         <path fill-rule="evenodd"
                                             d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
                                             clip-rule="evenodd" />
-                                    </svg></button>
+                                    </svg>
+                                </button>
                             </div>
 
                             <!-- 背景图片块 -->
@@ -1754,7 +1759,7 @@
                 let bgmGainNode = null;
                 const playbackProgress = ref(0);
                 const stageBgUrl = ref(''); // 播放/导出时的背景图片展示
-                const bgImageCount = ref(10); // 背景图片块数量（bgImage 对象个数）
+                const bgImageCount = ref(0); // 背景图片块数量（bgImage 对象个数）
                 const stageBgFadePrevUrl = ref(''); // 上一张背景，用于淡入
                 const stageBgFadeStartTs = ref(0);
                 const stageBgFadeDurationMs = 250; // 快速淡入时长
@@ -2142,6 +2147,10 @@
                     triggerAutoSave();
                 }, { deep: true });
 
+                watch(bgImageCount, () => {
+                    localStorage.setItem('unitale_bgImageCount', String(Math.max(0, Number(bgImageCount.value) || 0)));
+                });
+
                 // 读取持久化配置
                 onMounted(async () => {
 
@@ -2205,6 +2214,12 @@
  
                      const savedUseCustomQwen = localStorage.getItem('storyforge_use_custom_qwen_voice_text');
                      if (savedUseCustomQwen) useCustomQwenVoiceText.value = JSON.parse(savedUseCustomQwen);
+
+                     const savedBgImageCount = localStorage.getItem('unitale_bgImageCount');
+                     if (savedBgImageCount !== null) {
+                         const parsedBgImageCount = Number(savedBgImageCount);
+                         bgImageCount.value = Number.isFinite(parsedBgImageCount) ? Math.max(0, parsedBgImageCount) : 0;
+                     }
  
                      // --- Restore from IndexedDB ---
                      try {
@@ -2224,27 +2239,27 @@
                              console.log('Project data found, restoring text and metadata...');
  
                              // Restore libraries (metadata only)
-                             if (projectData.libraries) {
-                                 sfxLibrary.value = (projectData.libraries.sfx || []).map(s => ({ ...s, volume: s.volume ?? 0.3 }));
-                                 bgmLibrary.value = (projectData.libraries.bgm || []).map(b => ({ ...b, volume: b.volume ?? 0.3 }));
-                                 timbres.value = projectData.libraries.timbres || [];
-                                 filterLibrary.value = projectData.libraries.filters || filterLibrary.value; // Fallback to default if not in save
+                            if (projectData.libraries) {
+                                sfxLibrary.value = (projectData.libraries.sfx || []).map(s => ({ ...s, volume: s.volume ?? 0.3 }));
+                                bgmLibrary.value = (projectData.libraries.bgm || []).map(b => ({ ...b, volume: b.volume ?? 0.3 }));
+                                timbres.value = projectData.libraries.timbres || [];
+                                filterLibrary.value = projectData.libraries.filters || filterLibrary.value; // Fallback to default if not in save
                                  
                                  if (projectData.libraries.emotions && Array.isArray(projectData.libraries.emotions)) {
                                      const customLoaded = projectData.libraries.emotions.filter(e => !isSystemEmotion(e.name) && Array.isArray(e.vector));
                                      const systemLoaded = projectData.libraries.emotions.filter(e => isSystemEmotion(e.name));
-                                     const mergedSystem = SYSTEM_EMOTIONS.map(def => {
-                                         const saved = systemLoaded.find(s => s.name === def.name);
-                                         return { ...def, enabled: saved ? saved.enabled : undefined };
-                                     });
-                                     emotionPresets.value = [...mergedSystem, ...customLoaded];
-                                 }
-                             }
- 
-                             // Restore script list (metadata only)
-                             if (projectData.scriptList && Array.isArray(projectData.scriptList)) {
-                                 projectData.scriptList.forEach(script => {
-                                     if (script.data && script.data.scriptLines) {
+                                    const mergedSystem = SYSTEM_EMOTIONS.map(def => {
+                                        const saved = systemLoaded.find(s => s.name === def.name);
+                                        return { ...def, enabled: saved ? saved.enabled : undefined };
+                                    });
+                                    emotionPresets.value = [...mergedSystem, ...customLoaded];
+                                }
+                            }
+
+                            // Restore script list (metadata only)
+                            if (projectData.scriptList && Array.isArray(projectData.scriptList)) {
+                                projectData.scriptList.forEach(script => {
+                                    if (script.data && script.data.scriptLines) {
                                          script.data.scriptLines = script.data.scriptLines.map(lineData => {
                                              return { trimStart: 0, trimEnd: 1, ...lineData, imageUrl: '', audioUrl: '', isGenerating: false };
                                          });
