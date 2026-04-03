@@ -1937,7 +1937,20 @@
                             if (!res.ok) throw new Error(`Failed to fetch ${filename}`);
                             arrayBuffer = await res.arrayBuffer();
                         } else {
-                            throw new Error(`Audio file not found in memory: ${filename}`);
+                            // 兜底：尝试从本地相对路径（如 voice 目录）加载
+                            try {
+                                const localRes = await fetch(`voice/${filename}`);
+                                if (!localRes.ok) {
+                                    // 尝试根目录
+                                    const rootRes = await fetch(filename);
+                                    if (!rootRes.ok) throw new Error('Not found');
+                                    arrayBuffer = await rootRes.arrayBuffer();
+                                } else {
+                                    arrayBuffer = await localRes.arrayBuffer();
+                                }
+                            } catch (e) {
+                                throw new Error(`Audio file not found in memory or local path: ${filename}`);
+                            }
                         }
                         const buffer = await audioContext.decodeAudioData(arrayBuffer);
                         audioBufferCache.set(filename, buffer);
@@ -3505,10 +3518,7 @@
                             for (let i = 0; i < lib.length; i++) {
                                 const item = lib[i];
                                 // 进度提示 & 让出主线程防止卡死
-                                if (i % 5 === 0) {
-                                    exportStatus.value = `打包资源 ${i}/${lib.length}`;
-                                    await new Promise(r => setTimeout(r, 0));
-                                }
+                                if (i % 20 === 0) { exportStatus.value = `打包资源 ${Math.round((i / lib.length) * 100)}%`; await new Promise(r => requestAnimationFrame(r)); }
 
                                 const itemCopy = { ...item };
                                 const filename = item[fileKey];
@@ -3551,10 +3561,7 @@
                                 const line = lines[i];
                                 line.isGenerating = false;
 
-                            if (i % 5 === 0) {
-                                exportStatus.value = `打包音频...`;
-                                await new Promise(r => setTimeout(r, 0));
-                            }
+                            if (i % 20 === 0) { exportStatus.value = `打包音频...`; await new Promise(r => requestAnimationFrame(r)); }
 
                             // 尝试获取音频 Blob (优先 fetch URL，失败则查 DB)
                             let blob = null;
@@ -3601,28 +3608,28 @@
                         }
 
                         exportStatus.value = '生成文件...';
-                        await new Promise(r => setTimeout(r, 50)); // 给 UI 一点时间刷新
+                        await new Promise(r => requestAnimationFrame(r));
 
                         const blobParts = [];
                         blobParts.push('{\n  "version": "2.0",\n  "timestamp": "' + new Date().toISOString() + '",\n  "libraries": {\n');
 
                         blobParts.push('    "sfx": [');
                         for (let i = 0; i < sfxExport.length; i++) {
-                            blobParts.push(JSON.stringify(sfxExport[i]));
+                            blobParts.push(JSON.stringify(sfxExport[i] || null));
                             if (i < sfxExport.length - 1) blobParts.push(',');
                         }
                         blobParts.push('],\n');
 
                         blobParts.push('    "bgm": [');
                         for (let i = 0; i < bgmExport.length; i++) {
-                            blobParts.push(JSON.stringify(bgmExport[i]));
+                            blobParts.push(JSON.stringify(bgmExport[i] || null));
                             if (i < bgmExport.length - 1) blobParts.push(',');
                         }
                         blobParts.push('],\n');
 
                         blobParts.push('    "timbres": [');
                         for (let i = 0; i < timbreExport.length; i++) {
-                            blobParts.push(JSON.stringify(timbreExport[i]));
+                            blobParts.push(JSON.stringify(timbreExport[i] || null));
                             if (i < timbreExport.length - 1) blobParts.push(',');
                         }
                         blobParts.push('],\n');
@@ -3640,7 +3647,7 @@
                             
                             const lines = scriptListExport[i].data.scriptLines || [];
                             for (let j = 0; j < lines.length; j++) {
-                                blobParts.push(JSON.stringify(lines[j]));
+                                blobParts.push(JSON.stringify(lines[j] || null));
                                 if (j < lines.length - 1) blobParts.push(',');
                             }
                             
@@ -3675,28 +3682,67 @@
                     importFileRef.value.click();
                 };
 
-                const handleImportFile = (event) => {
+                const handleImportFile = async (event) => {
                     const file = event.target.files[0];
                     if (!file) return;
 
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        try {
-                            isRestoring.value = true; // 导入期间锁定，防止自动保存触发
-                            isExportingProject.value = true; // 复用 loading 状态
-                            exportStatus.value = '解析中...';
+                    try {
+                        isRestoring.value = true; // 导入期间锁定，防止自动保存触发
+                        isExportingProject.value = true; // 复用 loading 状态
+                        exportStatus.value = '读取巨型文件中...';
 
-                            const data = JSON.parse(e.target.result);
+                        exportStatus.value = '读取文件中...';
+                        const text = await file.text();
+                        exportStatus.value = '提取媒体数据...';
+
+                        const extractedBlobs = [];
+                        
+                        // 使用正则快速剥离超长 Base64 字符串，避免手动迭代缓慢
+                        let tinyJsonStr;
+                        try {
+                            tinyJsonStr = text.replace(/"(_fileData|audioBase64|imageBase64)":"(data:[^"]+)"/g, (match, key, base64) => {
+                                extractedBlobs.push(base64);
+                                return `"${key}":"__EXTRACTED_BASE64_${extractedBlobs.length - 1}__"`;
+                            });
+                        } catch (e) {
+                            console.error('正则替换提取Base64时出错:', e);
+                            exportStatus.value = `提取失败: ${e.message}`;
+                            throw e;
+                        }
+
+                        exportStatus.value = '解析结构数据...';
+                        let data;
+                        try {
+                            data = JSON.parse(tinyJsonStr);
+                        } catch (err) {
+                            console.error("JSON解析失败:", err);
+                            const match = err.message.match(/position (\d+)/);
+                            if (match) {
+                                const pos = parseInt(match[1]);
+                                console.error("解析出错位置附近内容:", tinyJsonStr.substring(Math.max(0, pos - 50), pos + 50));
+                            }
+                            exportStatus.value = `解析失败: ${err.message}`;
+                            throw err;
+                        }
+
                             const assetsToSave = []; // 用于批量收集待保存的音频文件
 
                             // 辅助函数：恢复资源库文件
                             const restoreLibraryFiles = async (libItems, fileKey) => {
-                                if (!libItems) return [];
+                                if (!libItems || !Array.isArray(libItems)) return [];
                                 const restoredItems = [];
                                 for (const item of libItems) {
+                                    if (!item) continue;
                                     if (item._fileData) {
                                         try {
-                                            const blob = base64ToBlob(item._fileData, item._mimeType || 'audio/wav');
+                                            // 如果使用了提取器，拿回真实的 base64 数据
+                                            let realBase64 = item._fileData;
+                                            if (realBase64.startsWith('__EXTRACTED_BASE64_')) {
+                                                const match = realBase64.match(/__EXTRACTED_BASE64_(\d+)__/);
+                                                if (match) realBase64 = extractedBlobs[parseInt(match[1])];
+                                            }
+                                            
+                                            const blob = base64ToBlob(realBase64, item._mimeType || 'audio/wav');
                                             const file = new File([blob], item[fileKey], { type: item._mimeType || 'audio/wav' });
                                             localFileMap.value.set(item[fileKey], file);
 
@@ -3726,7 +3772,7 @@
                                 rawAnalysisResult.value = '';
                                 characters.value = [];
                                 scriptLines.value = [];
-                                scriptList.value = [{ id: 'default', name: '脚本 1', data: { rawScript: '', scriptLines: [], rawAnalysisResult: '' } }];
+                                scriptList.value = [{ id: 'default', name: '脚本 1', data: { rawScript: '', scriptLines: [], rawAnalysisResult: '', characters: [] } }];
                                 sfxLibrary.value = [];
                                 bgmLibrary.value = [];
                                 timbres.value = [];
@@ -3796,10 +3842,23 @@
                                 for (const script of scriptList.value) {
                                     const lines = script.data.scriptLines || [];
                                     for (const line of lines) {
+                                        if (!line) continue;
                                         if (line.audioBase64) {
                                             try {
-                                                const res = await fetch(line.audioBase64);
-                                                const blob = await res.blob();
+                                                let realAudioBase64 = line.audioBase64;
+                                                if (typeof realAudioBase64 === 'string' && realAudioBase64.startsWith('__EXTRACTED_BASE64_')) {
+                                                    const match = realAudioBase64.match(/__EXTRACTED_BASE64_(\d+)__/);
+                                                    if (match) realAudioBase64 = extractedBlobs[parseInt(match[1])];
+                                                }
+                                                let blob;
+                                                if (realAudioBase64.startsWith('data:')) {
+                                                    const parts = realAudioBase64.split(',');
+                                                    const mime = parts[0].match(/:(.*?);/)[1];
+                                                    blob = base64ToBlob(realAudioBase64, mime);
+                                                } else {
+                                                    const res = await fetch(realAudioBase64);
+                                                    blob = await res.blob();
+                                                }
                                                 assetsToSave.push({ key: `line_audio_${line.id}`, blob: blob });
                                                 if (line.speed === undefined) line.speed = 1.0;
                                                 line.audioUrl = URL.createObjectURL(blob);
@@ -3808,8 +3867,20 @@
                                         }
                                         if (line.type === 'bgImage' && line.imageBase64) {
                                             try {
-                                                const res = await fetch(line.imageBase64);
-                                                const blob = await res.blob();
+                                                let realImageBase64 = line.imageBase64;
+                                                if (typeof realImageBase64 === 'string' && realImageBase64.startsWith('__EXTRACTED_BASE64_')) {
+                                                    const match = realImageBase64.match(/__EXTRACTED_BASE64_(\d+)__/);
+                                                    if (match) realImageBase64 = extractedBlobs[parseInt(match[1])];
+                                                }
+                                                let blob;
+                                                if (realImageBase64.startsWith('data:')) {
+                                                    const parts = realImageBase64.split(',');
+                                                    const mime = parts[0].match(/:(.*?);/)[1];
+                                                    blob = base64ToBlob(realImageBase64, mime);
+                                                } else {
+                                                    const res = await fetch(realImageBase64);
+                                                    blob = await res.blob();
+                                                }
                                                 const bgKey = line.bgImageAssetKey || `bgImage_${line.id}`;
                                                 line.bgImageAssetKey = bgKey;
                                                 assetsToSave.push({ key: bgKey, blob: blob });
@@ -3940,14 +4011,14 @@
                                 alert('无效的存档文件格式');
                             }
                         } catch (err) {
-                            alert('读取失败: ' + err.message);
+                            console.error('导入工程失败:', err);
+                            exportStatus.value = `导入失败: ${err.message}`;
+                            alert(`导入失败: ${err.message}\n请打开控制台查看详细报错。`);
                         } finally {
                             isExportingProject.value = false;
                             exportStatus.value = '';
                         }
                         event.target.value = ''; // Reset
-                    };
-                    reader.readAsText(file);
                 };
 
                 const triggerImportTxt = () => {
@@ -4712,7 +4783,7 @@
                 };
 
                 // --- 视频生成（MP4 离线合成） ---
-                const generateVideo = async () => {
+const generateVideo = async () => {
                     const dialogueLines = scriptLines.value.filter(l => l.type === 'dialogue');
                     if (dialogueLines.length === 0) return alert('脚本为空');
 
@@ -4720,7 +4791,7 @@
                         if (!confirm('部分台词尚未生成音频，导出视频时将跳过未生成的台词。确定继续吗？')) return;
                     }
 
-                    if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') {
+                    if (typeof VideoEncoder === 'undefined') {
                         return alert('当前浏览器不支持 WebCodecs API，无法快速导出视频。请使用最新版 Chrome 或 Edge。');
                     }
                     if (typeof Mp4Muxer === 'undefined') {
@@ -4731,34 +4802,14 @@
                     exportStatus.value = '准备素材...';
 
                     try {
-                        const assets = { dialogues: {}, sfx: {}, bgm: {} };
+                        const assets = { dialogues: {} };
 
                         // 1. 加载所有台词音频
                         for (const line of dialogueLines) {
                             if (line.audioUrl) assets.dialogues[line.id] = await loadAudioBuffer(line.audioUrl);
                         }
 
-                        // 2. 加载用到的音效
-                        const usedSfxNames = new Set();
-                        scriptLines.value.forEach(l => { if (l.sfx) l.sfx.forEach(s => usedSfxNames.add(s.name)); });
-                        for (const name of usedSfxNames) {
-                            const item = sfxLibrary.value.find(s => s.name === name);
-                            if (item && item.filename) {
-                                try { assets.sfx[name] = await loadAudioBuffer(item.filename); } catch (e) { }
-                            }
-                        }
-
-                        // 3. 加载用到的 BGM
-                        const usedBgmNames = new Set();
-                        scriptLines.value.forEach(l => { if (l.type === 'bgm' && l.action === 'play') usedBgmNames.add(l.bgmName); });
-                        for (const name of usedBgmNames) {
-                            const item = bgmLibrary.value.find(b => b.name === name);
-                            if (item && item.filename) {
-                                try { assets.bgm[name] = await loadAudioBuffer(item.filename); } catch (e) { }
-                            }
-                        }
-
-                        // 4. 加载背景图片
+                        // 2. 加载背景图片
                         const bgUrls = Array.from(new Set(
                             scriptLines.value.filter(l => l.type === 'bgImage' && l.imageUrl).map(l => l.imageUrl)
                         ));
@@ -4774,12 +4825,8 @@
                             bgImageCache.set(url, img);
                         }
 
-                        // 5. 计算时间轴 (同时用于音频和视频)
+                        // 3. 用与音频导出一致的时长规则计算视频时间轴
                         let currentTime = 0;
-                        const events = [];
-                        const bgmSegments = [];
-                        let currentBgm = null;
-                        
                         const visualTimeline = [];
                         let currentBgUrl = '';
                         let lastBgChangeTime = 0;
@@ -4789,17 +4836,7 @@
                         if (firstBgLine) currentBgUrl = firstBgLine.imageUrl;
 
                         for (const line of scriptLines.value) {
-                            if (line.type === 'bgm') {
-                                if (line.action === 'play') {
-                                    if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime });
-                                    currentBgm = { name: line.bgmName, start: currentTime, volume: line.volume };
-                                } else if (line.action === 'stop') {
-                                    if (currentBgm) {
-                                        bgmSegments.push({ ...currentBgm, end: currentTime });
-                                        currentBgm = null;
-                                    }
-                                }
-                            } else if (line.type === 'bgImage') {
+                            if (line.type === 'bgImage') {
                                 if (line.imageUrl && line.imageUrl !== currentBgUrl) {
                                     if (currentTime > lastBgChangeTime) {
                                         visualTimeline.push({
@@ -4821,13 +4858,11 @@
                                     const effectiveDuration = playDuration / speed;
 
                                     currentTime += 0.05;
-                                    events.push({ type: 'dialogue', time: currentTime, buffer: buffer, line: line, trimStart, trimEnd, playDuration, speed });
                                     currentTime += effectiveDuration;
                                 }
                                 currentTime += (line.break_duration || 0);
                             }
                         }
-                        if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + 2 }); // BGM 尾部淡出
                         if (currentTime > lastBgChangeTime) {
                             visualTimeline.push({
                                 url: currentBgUrl,
@@ -4837,108 +4872,9 @@
                         }
                         
                         const totalDuration = currentTime + 1;
-                        const sampleRate = 44100;
-                        const offlineCtx = new OfflineAudioContext(2, totalDuration * sampleRate, sampleRate);
-
-                        // 调度 BGM
-                        bgmSegments.forEach(seg => {
-                            const buffer = assets.bgm[seg.name];
-                            if (buffer) {
-                                const libItem = bgmLibrary.value.find(b => b.name === seg.name);
-                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
-                                const finalVol = seg.volume * libVol;
-                                const src = offlineCtx.createBufferSource();
-                                src.buffer = buffer;
-                                src.loop = true;
-                                const trimStart = libItem?.trimStart ?? 0;
-                                const trimEnd = libItem?.trimEnd ?? 1;
-                                src.loopStart = buffer.duration * trimStart;
-                                src.loopEnd = buffer.duration * trimEnd;
-                                const gain = offlineCtx.createGain();
-                                gain.gain.setValueAtTime(0, seg.start);
-                                gain.gain.linearRampToValueAtTime(finalVol, seg.start + 2);
-                                gain.gain.setValueAtTime(finalVol, Math.max(seg.start + 2, seg.end - 2));
-                                gain.gain.linearRampToValueAtTime(0, seg.end);
-                                src.connect(gain).connect(offlineCtx.destination);
-                                src.start(seg.start, src.loopStart);
-                                src.stop(seg.end);
-                            }
-                        });
-
-                        // 调度台词和音效
-                        events.forEach(evt => {
-                            const dSrc = offlineCtx.createBufferSource();
-                            dSrc.buffer = evt.buffer;
-                            dSrc.playbackRate.value = evt.speed;
-                            const dGain = offlineCtx.createGain();
-                            const char = characters.value.find(c => c.name === evt.line.role);
-                            const charVol = char ? (char.volume ?? 1.0) : 1.0;
-                            dGain.gain.value = (evt.line.dialogueVolume ?? 1.0) * charVol;
-
-                            const offset = evt.buffer.duration * evt.trimStart;
-                            const duration = evt.playDuration;
-
-                            let lastNode = dSrc;
-                            if (evt.line.filter) {
-                                const fConfig = filterLibrary.value.find(f => f.name === evt.line.filter);
-                                if (fConfig) {
-                                    if (fConfig.type === 'distortion') {
-                                        const ws = offlineCtx.createWaveShaper();
-                                        ws.curve = makeDistortionCurve(fConfig.gain);
-                                        ws.oversample = '4x';
-                                        lastNode.connect(ws);
-                                        lastNode = ws;
-                                    } else {
-                                        const bq = offlineCtx.createBiquadFilter();
-                                        bq.type = fConfig.type;
-                                        bq.frequency.value = fConfig.frequency;
-                                        bq.Q.value = fConfig.Q;
-                                        lastNode.connect(bq);
-                                        lastNode = bq;
-                                    }
-                                }
-                            }
-                            lastNode.connect(dGain).connect(offlineCtx.destination);
-                            dSrc.start(evt.time, offset, duration);
-
-                            if (evt.line.sfx) {
-                                evt.line.sfx.forEach(s => {
-                                    const sBuffer = assets.sfx[s.name];
-                                    if (sBuffer) {
-                                        const originalDuration = evt.buffer.duration;
-                                        const absStart = originalDuration * evt.trimStart;
-                                        const absEnd = originalDuration * evt.trimEnd;
-                                        const trimmedDuration = absEnd - absStart;
-                                        const pos = parseFloat(s.position) || 0;
-                                        const absSfxTime = absStart + (trimmedDuration * pos);
-
-                                        if (absSfxTime >= absStart && absSfxTime <= absEnd) {
-                                            const sSrc = offlineCtx.createBufferSource();
-                                            sSrc.buffer = sBuffer;
-                                            const sGain = offlineCtx.createGain();
-                                            const libItem = sfxLibrary.value.find(l => l.name === s.name);
-                                            const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
-                                            const scriptVol = evt.line.sfxVolume ?? 0.5;
-                                            sGain.gain.value = scriptVol * libVol;
-                                            const sTrimStart = libItem?.trimStart ?? 0;
-                                            const sTrimEnd = libItem?.trimEnd ?? 1;
-                                            const sOffset = sBuffer.duration * sTrimStart;
-                                            const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
-                                            sSrc.connect(sGain).connect(offlineCtx.destination);
-                                            const relativeStart = absSfxTime - absStart;
-                                            sSrc.start(evt.time + relativeStart / evt.speed, sOffset, sDuration);
-                                        }
-                                    }
-                                });
-                            }
-                        });
-
-                        exportStatus.value = '合成音频...';
-                        const renderedBuffer = await offlineCtx.startRendering();
-
                         exportStatus.value = '生成视频轨道...';
                         
-                        const fps = 30;
+                        const fps = 4;
                         let [width, height] = videoResolution.value.split('x').map(Number);
                         
                         // Ensure width and height are even numbers (required by many hardware encoders)
@@ -4948,11 +4884,10 @@
                         const muxer = new Mp4Muxer.Muxer({
                             target: new Mp4Muxer.ArrayBufferTarget(),
                             video: { codec: 'avc', width, height },
-                            audio: { codec: 'aac', sampleRate: 44100, numberOfChannels: 2 },
                             fastStart: 'in-memory'
                         });
 
-                        let videoEncoder, audioEncoder;
+                        let videoEncoder;
 
                         const encodeErrorPromise = new Promise((_, reject) => {
                             videoEncoder = new VideoEncoder({
@@ -4963,22 +4898,15 @@
                                 }
                             });
 
-                            audioEncoder = new AudioEncoder({
-                                output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-                                error: e => { 
-                                    console.error('AudioEncoder error:', e); 
-                                    reject(new Error('音频编码错误: ' + e.message)); 
-                                }
-                            });
                         });
 
                         // Dynamically choose codec profile based on resolution.                        // 1080p (1920x1080 or 1080x1920) typically needs Level 4.2 (avc1.64002A) or Level 4.0.
-                        let codecString = 'avc1.4d002a'; // Main Profile, Level 4.2 (1080p 60fps)
+                        let codecString = 'avc1.4d002a'; // Main Profile，静态高清图更不容易出马赛克
                         
                         const config = {
                             codec: codecString,
                             width, height,
-                            bitrate: 5_000_000,
+                            bitrate: 3_000_000,
                             framerate: fps,
                             hardwareAcceleration: "prefer-hardware"
                         };
@@ -5003,22 +4931,15 @@
                         }
 
                         videoEncoder.configure(config);
-                        audioEncoder.configure({
-                            codec: 'mp4a.40.2',
-                            sampleRate: 44100,
-                            numberOfChannels: 2,
-                            bitrate: 128000
-                        });
 
                         // Yield to the event loop to allow the encoders' configuration tasks to complete.
                         await new Promise(r => setTimeout(r, 0));
 
                         const renderVideoPromise = async () => {
-                            // 绘制视频帧
                             const offscreenCanvas = new OffscreenCanvas(width, height);
                             const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
-                            const totalFrames = Math.ceil(totalDuration * fps);
-                            
+                            offscreenCtx.imageSmoothingEnabled = true;
+                            offscreenCtx.imageSmoothingQuality = 'high';
                             const drawCover = (ctx, img, cw, ch) => {
                                 const scale = Math.max(cw / img.width, ch / img.height);
                                 const dw = img.width * scale;
@@ -5028,55 +4949,38 @@
                                 ctx.drawImage(img, dx, dy, dw, dh);
                             };
 
-                            let currentTimelineIndex = 0;
-                            const fadeFrames = Math.floor(0.25 * fps); // 250ms fade
-                            let fadeCounter = 0;
-                            let prevBgUrl = '';
-                            
-                            let lastDrawnBgUrl = null;
-                            let lastDrawnAlpha = -1;
+                            const segments = visualTimeline
+                                .filter(stage => stage && stage.end > stage.start)
+                                .map(stage => ({
+                                    url: stage.url || '',
+                                    startUs: Math.round(stage.start * 1000000),
+                                    durationUs: Math.max(1, Math.round((stage.end - stage.start) * 1000000))
+                                }));
 
-                            for (let i = 0; i < totalFrames; i++) {
-                                const t = i / fps;
-                                
-                                while (currentTimelineIndex < visualTimeline.length - 1 && t >= visualTimeline[currentTimelineIndex].end) {
-                                    prevBgUrl = visualTimeline[currentTimelineIndex].url;
-                                    currentTimelineIndex++;
-                                    fadeCounter = fadeFrames;
-                                }
-                                
-                                const stage = visualTimeline[currentTimelineIndex];
-                                const currentUrl = stage ? stage.url : '';
+                            if (segments.length === 0) {
+                                segments.push({
+                                    url: '',
+                                    startUs: 0,
+                                    durationUs: Math.max(1, Math.round(totalDuration * 1000000))
+                                });
+                            }
 
-                                let alpha = 1;
-                                let isFading = false;
-                                if (fadeCounter > 0 && prevBgUrl !== currentUrl) {
-                                    alpha = 1 - (fadeCounter / fadeFrames);
-                                    fadeCounter--;
-                                    isFading = true;
-                                }
+                            const frameDurationUs = Math.round(1000000 / fps);
+                            const totalFrames = segments.reduce((sum, stage) => {
+                                return sum + Math.max(1, Math.ceil(stage.durationUs / frameDurationUs));
+                            }, 0);
+                            let encodedFrames = 0;
 
-                                const needsRedraw = isFading || currentUrl !== lastDrawnBgUrl || alpha !== lastDrawnAlpha;
-                                
-                                if (needsRedraw) {
-                                    offscreenCtx.fillStyle = '#000';
-                                    offscreenCtx.fillRect(0, 0, width, height);
+                            for (let i = 0; i < segments.length; i++) {
+                                const stage = segments[i];
+                                const currentUrl = stage.url;
 
-                                    if (isFading && bgImageCache.has(prevBgUrl)) {
-                                        const img = bgImageCache.get(prevBgUrl);
-                                        offscreenCtx.globalAlpha = 1 - alpha;
-                                        drawCover(offscreenCtx, img, width, height);
-                                    }
+                                offscreenCtx.fillStyle = '#000';
+                                offscreenCtx.fillRect(0, 0, width, height);
 
-                                    if (currentUrl && bgImageCache.has(currentUrl)) {
-                                        const img = bgImageCache.get(currentUrl);
-                                        offscreenCtx.globalAlpha = alpha;
-                                        drawCover(offscreenCtx, img, width, height);
-                                    }
-                                    
-                                    offscreenCtx.globalAlpha = 1;
-                                    lastDrawnBgUrl = currentUrl;
-                                    lastDrawnAlpha = alpha;
+                                if (currentUrl && bgImageCache.has(currentUrl)) {
+                                    const img = bgImageCache.get(currentUrl);
+                                    drawCover(offscreenCtx, img, width, height);
                                 }
 
                                 while (videoEncoder.encodeQueueSize > 30) {
@@ -5086,18 +4990,29 @@
                                     await new Promise(r => setTimeout(r, 10));
                                 }
                                 
-                                if (i % 30 === 0) {
-                                    exportStatus.value = `编码视频 ${Math.round((i / totalFrames) * 100)}%`;
-                                    await new Promise(r => setTimeout(r, 0));
+                                const stageFrames = Math.max(1, Math.ceil(stage.durationUs / frameDurationUs));
+                                for (let frameIndex = 0; frameIndex < stageFrames; frameIndex++) {
+                                    const frameStartUs = stage.startUs + (frameIndex * frameDurationUs);
+                                    const isLastFrame = frameIndex === stageFrames - 1;
+                                    const durationUs = isLastFrame
+                                        ? Math.max(1, stage.durationUs - (frameIndex * frameDurationUs))
+                                        : frameDurationUs;
+
+                                    const frame = new VideoFrame(offscreenCanvas, {
+                                        timestamp: frameStartUs,
+                                        duration: durationUs
+                                    });
+                                    if (videoEncoder.state !== 'configured') {
+                                        frame.close();
+                                        throw new Error('视频编码器状态异常 (' + videoEncoder.state + ')。可能是分辨率或编码配置不受当前浏览器支持。');
+                                    }
+                                    videoEncoder.encode(frame, { keyFrame: frameIndex === 0 });
+                                    frame.close();
+                                    encodedFrames++;
                                 }
 
-                                const frame = new VideoFrame(offscreenCanvas, { timestamp: i * 1000000 / fps });
-                                if (videoEncoder.state !== 'configured') {
-                                    frame.close();
-                                    throw new Error('视频编码器状态异常 (' + videoEncoder.state + ')。可能是分辨率或编码配置不受当前浏览器支持。');
-                                }
-                                videoEncoder.encode(frame, { keyFrame: i % fps === 0 });
-                                frame.close();
+                                exportStatus.value = `编码视频 ${Math.round((encodedFrames / totalFrames) * 100)}%`;
+                                await new Promise(r => setTimeout(r, 0));
                             }
                             
                             if (videoEncoder.state === 'configured') {
@@ -5106,54 +5021,9 @@
                             }
                         };
 
-                        const renderAudioPromise = async () => {
-                            exportStatus.value = '编码音频...';
-                            const numberOfChannels = renderedBuffer.numberOfChannels;
-                            const length = renderedBuffer.length;
-                            
-                            const chunkSize = 1024;
-                            for (let i = 0; i < length; i += chunkSize) {
-                                const end = Math.min(i + chunkSize, length);
-                                const chunkLength = end - i;
-                                
-                                const chunkPlanarData = new Float32Array(chunkLength * numberOfChannels);
-                                for(let c = 0; c < numberOfChannels; c++) {
-                                    const sourceChannelData = renderedBuffer.getChannelData(c);
-                                    chunkPlanarData.set(sourceChannelData.subarray(i, end), c * chunkLength);
-                                }
-
-                                const audioData = new AudioData({
-                                    format: 'f32-planar',
-                                    sampleRate: 44100,
-                                    numberOfFrames: chunkLength,
-                                    numberOfChannels: 2,
-                                    timestamp: (i / 44100) * 1000000,
-                                    data: chunkPlanarData
-                                });
-                                
-                                while (audioEncoder.encodeQueueSize > 50) {
-                                    if (audioEncoder.state !== 'configured') {
-                                        break;
-                                    }
-                                    await new Promise(r => setTimeout(r, 10));
-                                }
-                                if (audioEncoder.state !== 'configured') {
-                                    audioData.close();
-                                    throw new Error('音频编码器状态异常 (' + audioEncoder.state + ')');
-                                }
-                                audioEncoder.encode(audioData);
-                                audioData.close();
-                            }
-                            
-                            if (audioEncoder.state === 'configured') {
-                                await audioEncoder.flush();
-                                audioEncoder.close();
-                            }
-                        };
-
                         // 运行编码并捕获任何可能发生的抛错
                         await Promise.race([
-                            Promise.all([renderVideoPromise(), renderAudioPromise()]),
+                            renderVideoPromise(),
                             encodeErrorPromise
                         ]);
 
@@ -5179,6 +5049,8 @@
                         exportStatus.value = '';
                     }
                 };
+
+                
 
                 const analyzeScript = async () => {
                     if (isAnalyzingScript.value) {
@@ -5764,3 +5636,6 @@
 </body>
 
 </html>
+
+
+
