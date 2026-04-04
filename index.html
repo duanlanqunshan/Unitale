@@ -16,6 +16,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
+    <script src="./vendor/ffmpeg/ffmpeg.js"></script>
+    <script src="./vendor/ffmpeg/util.js"></script>
     <style>
         .thinking {
             color: #6b7280;
@@ -1132,7 +1134,7 @@
                                                         <span class="text-[8px] font-bold text-slate-400 uppercase">语速</span>
                                                         <span class="text-[8px] text-slate-400 font-mono">{{ (line.speed || 1).toFixed(1) }}x</span>
                                                     </div>
-                                                    <input type="range" v-model.number="line.speed" min="0.5" max="2" step="0.1"
+                                                    <input type="range" v-model.number="line.speed" min="0.2" max="2" step="0.1"
                                                         class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-green-600 block">
                                                 </div>
                                             </div>
@@ -1947,7 +1949,193 @@
                 let videoRecordingAudioDestination = null;
                 const getAudioOutputNode = () => videoRecordingAudioDestination || audioContext.destination;
                 const audioBufferCache = new Map();
+                const processedDialogueAssetCache = new Map();
+                const processedDialogueBufferPromiseCache = new Map();
+                let ffmpegLoadPromise = null;
+                let ffmpegInstance = null;
+                let ffmpegTaskQueue = Promise.resolve();
                 const localFileMap = ref(new Map());
+
+                const ensureFFmpegLoaded = async () => {
+                    if (ffmpegInstance) return ffmpegInstance;
+                    if (!ffmpegLoadPromise) {
+                        ffmpegLoadPromise = (async () => {
+                            const FFmpegGlobal = window.FFmpegWASM;
+                            const FFmpegUtilGlobal = window.FFmpegUtil;
+                            if (!FFmpegGlobal?.FFmpeg || !FFmpegUtilGlobal?.toBlobURL) {
+                                throw new Error('ffmpeg.wasm 依赖加载失败');
+                            }
+                            const { FFmpeg } = FFmpegGlobal;
+                            const { toBlobURL } = FFmpegUtilGlobal;
+                            const ffmpeg = new FFmpeg();
+                            const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+                            await ffmpeg.load({
+                                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
+                            });
+                            ffmpegInstance = ffmpeg;
+                            return ffmpeg;
+                        })();
+                    }
+                    return ffmpegLoadPromise;
+                };
+
+                const runFFmpegTask = async (task) => {
+                    const scheduled = ffmpegTaskQueue.then(task, task);
+                    ffmpegTaskQueue = scheduled.catch(() => {});
+                    return scheduled;
+                };
+
+                const getAudioBlobFromUrl = async (audioUrl) => {
+                    const response = await fetch(audioUrl);
+                    if (!response.ok) throw new Error('读取原始音频失败');
+                    return await response.blob();
+                };
+
+                const getFileExtensionFromBlob = (blob) => {
+                    const mime = (blob?.type || '').toLowerCase();
+                    if (mime.includes('wav')) return 'wav';
+                    if (mime.includes('mpeg')) return 'mp3';
+                    if (mime.includes('ogg')) return 'ogg';
+                    if (mime.includes('webm')) return 'webm';
+                    if (mime.includes('mp4')) return 'm4a';
+                    return 'wav';
+                };
+
+                const buildAtempoFilterChain = (speed) => {
+                    const filters = [];
+                    let remaining = Math.max(0.2, Math.min(2, Number(speed) || 1));
+
+                    while (remaining < 0.5) {
+                        filters.push('atempo=0.5');
+                        remaining /= 0.5;
+                    }
+                    while (remaining > 2) {
+                        filters.push('atempo=2.0');
+                        remaining /= 2.0;
+                    }
+
+                    filters.push(`atempo=${remaining.toFixed(3)}`);
+                    return filters.join(',');
+                };
+
+                const buildDialogueAudioFilter = (startSec, endSec, speed) => {
+                    const parts = [
+                        `atrim=start=${startSec.toFixed(4)}:end=${endSec.toFixed(4)}`,
+                        'asetpts=PTS-STARTPTS'
+                    ];
+                    const atempoChain = buildAtempoFilterChain(speed);
+                    if (atempoChain) parts.push(atempoChain);
+                    return parts.join(',');
+                };
+
+                const getProcessedDialogueAsset = async (line) => {
+                    if (!line?.audioUrl) return null;
+                    const sourceBuffer = await loadAudioBuffer(line.audioUrl);
+                    if (!sourceBuffer) return null;
+
+                    const trimStart = line.trimStart || 0;
+                    const trimEnd = line.trimEnd || 1;
+                    const speed = line.speed || 1.0;
+                    const cacheKey = [
+                        line.id,
+                        line.audioUrl,
+                        sourceBuffer.length,
+                        sourceBuffer.sampleRate,
+                        trimStart,
+                        trimEnd,
+                        speed
+                    ].join('|');
+
+                    if (processedDialogueAssetCache.has(cacheKey)) {
+                        return processedDialogueAssetCache.get(cacheKey);
+                    }
+                    if (processedDialogueBufferPromiseCache.has(cacheKey)) {
+                        return processedDialogueBufferPromiseCache.get(cacheKey);
+                    }
+
+                    const processPromise = (async () => {
+                        const safeSpeed = Math.max(0.2, Math.min(2, Number(speed) || 1));
+                        const startSec = sourceBuffer.duration * trimStart;
+                        const endSec = Math.max(startSec + 0.01, sourceBuffer.duration * trimEnd);
+
+                        if (Math.abs(safeSpeed - 1) < 0.001 && trimStart <= 0.0001 && trimEnd >= 0.9999) {
+                            const originalBlob = await getAudioBlobFromUrl(line.audioUrl);
+                            const processedBuffer = sourceBuffer;
+                            const asset = {
+                                buffer: processedBuffer,
+                                blob: originalBlob,
+                                url: line.audioUrl,
+                                duration: processedBuffer.duration
+                            };
+                            processedDialogueAssetCache.set(cacheKey, asset);
+                            return asset;
+                        }
+
+                        const ffmpeg = await ensureFFmpegLoaded();
+                        const sourceBlob = await getAudioBlobFromUrl(line.audioUrl);
+                        const sourceExt = getFileExtensionFromBlob(sourceBlob);
+                        const inputName = `line_${line.id}_${Date.now()}.${sourceExt}`;
+                        const outputName = `line_${line.id}_${Date.now()}_processed.wav`;
+
+                        const processedBytes = await runFFmpegTask(async () => {
+                            await ffmpeg.writeFile(inputName, new Uint8Array(await sourceBlob.arrayBuffer()));
+                            await ffmpeg.exec([
+                                '-i', inputName,
+                                '-af', buildDialogueAudioFilter(startSec, endSec, safeSpeed),
+                                '-vn',
+                                '-acodec', 'pcm_s16le',
+                                outputName
+                            ]);
+                            const data = await ffmpeg.readFile(outputName);
+                            await ffmpeg.deleteFile(inputName);
+                            await ffmpeg.deleteFile(outputName);
+                            return data;
+                        });
+
+                        const processedBlob = new Blob([processedBytes.buffer.slice(processedBytes.byteOffset, processedBytes.byteOffset + processedBytes.byteLength)], { type: 'audio/wav' });
+                        const processedUrl = URL.createObjectURL(processedBlob);
+                        const processedBuffer = await loadAudioBuffer(processedUrl);
+                        const asset = {
+                            buffer: processedBuffer,
+                            blob: processedBlob,
+                            url: processedUrl,
+                            duration: processedBuffer.duration
+                        };
+                        processedDialogueAssetCache.set(cacheKey, asset);
+                        return asset;
+                    })();
+
+                    processedDialogueBufferPromiseCache.set(cacheKey, processPromise);
+                    try {
+                        return await processPromise;
+                    } finally {
+                        processedDialogueBufferPromiseCache.delete(cacheKey);
+                    }
+                };
+
+                const getProcessedDialogueBuffer = async (line) => {
+                    const asset = await getProcessedDialogueAsset(line);
+                    return asset?.buffer || null;
+                };
+
+                const getDialogueTimingInfo = async (line) => {
+                    const asset = await getProcessedDialogueAsset(line);
+                    if (!asset) return null;
+                    const sourceBuffer = await loadAudioBuffer(line.audioUrl);
+                    const trimStart = Math.max(0, Math.min(1, Number(line.trimStart) || 0));
+                    const trimEnd = Math.max(trimStart, Math.min(1, Number(line.trimEnd) || 1));
+                    const safeSpeed = Math.max(0.2, Math.min(2, Number(line.speed) || 1));
+
+                    return {
+                        trimStart,
+                        trimEnd,
+                        safeSpeed,
+                        trimmedDuration: sourceBuffer ? sourceBuffer.duration * Math.max(0.0001, trimEnd - trimStart) : asset.duration,
+                        effectiveDuration: asset.duration,
+                        processedBuffer: asset.buffer
+                    };
+                };
 
                 const loadAudioBuffer = async (filename) => {
                     if (!filename) return null;
@@ -3331,13 +3519,7 @@
 
                             isAuditioningId.value = line.id;
 
-                            // 3. Prepare loading promises (Parallel loading)
-                            const loadDialogue = async () => {
-                                const res = await fetch(line.audioUrl);
-                                const ab = await res.arrayBuffer();
-                                return await audioContext.decodeAudioData(ab);
-                            };
-
+                            // 3. Prepare loading promises
                             const loadSfx = async () => {
                                 if (!line.sfx || line.sfx.length === 0) return [];
                                 const promises = line.sfx.map(async (sfxItem) => {
@@ -3358,32 +3540,53 @@
                                 return results.filter(r => r !== null);
                             };
 
-                            // 4. Execute loads in parallel
-                            const [dialogueBuffer, sfxBuffers] = await Promise.all([
-                                loadDialogue(),
-                                loadSfx()
-                            ]);
+                            const timingInfo = await getDialogueTimingInfo(line);
+                            if (!timingInfo) {
+                                isAuditioningId.value = null;
+                                return resolve();
+                            }
+                            const { trimStart, trimEnd, processedBuffer } = timingInfo;
+                            const processedDuration = processedBuffer.duration;
+                            const sfxBuffers = await loadSfx();
+                            const trimSpan = Math.max(0.0001, trimEnd - trimStart);
 
-                            // 5. Set up dialogue
-                            dialogueSource = audioContext.createBufferSource();
-                            dialogueSource.buffer = dialogueBuffer;
+                            const now = audioContext.currentTime + 0.05; // Slight delay for sync
 
-                            // 计算剪辑参数
-                            const trimStart = line.trimStart || 0;
-                            const trimEnd = line.trimEnd || 1;
-                            const duration = dialogueBuffer.duration;
-                            const startTimeOffset = duration * trimStart;
-                            const playDuration = duration * (trimEnd - trimStart);
-                            const speed = line.speed || 1.0;
+                            // 6. Schedule SFX
+                            sfxBuffers.forEach(({ buffer, item, libVolume, trimStart: sfxTrimStart, trimEnd: sfxTrimEnd }) => {
+                                const pos = parseFloat(item.position) || 0;
+                                const clampedPos = Math.max(0, Math.min(1, pos));
+                                const sfxTime = now + (processedDuration * clampedPos);
+                                if (Number.isFinite(sfxTime)) {
+                                    const sSrc = audioContext.createBufferSource();
+                                    sSrc.buffer = buffer;
+                                    const sGain = audioContext.createGain();
+                                    const finalSfxVol = (line.sfxVolume ?? 0.5) * (libVolume ?? 1.0);
+                                    sGain.gain.setValueAtTime(finalSfxVol, now);
+                                    sSrc.connect(sGain).connect(getAudioOutputNode());
 
-                            const dialogueGain = audioContext.createGain();
+                                    const sOffset = buffer.duration * sfxTrimStart;
+                                    const sDuration = buffer.duration * (sfxTrimEnd - sfxTrimStart);
+                                    sSrc.start(sfxTime, sOffset, sDuration);
+
+                                    sfxSources.push(sSrc);
+                                    sSrc.onended = () => {
+                                        const idx = sfxSources.indexOf(sSrc);
+                                        if (idx > -1) sfxSources.splice(idx, 1);
+                                    };
+                                }
+                            });
+
+                            // 7. Play dialogue from processed buffer
                             const char = characters.value.find(c => c.name === line.role);
                             const charVol = char ? (char.volume ?? 1.0) : 1.0;
+                            dialogueSource = audioContext.createBufferSource();
+                            dialogueSource.buffer = processedBuffer;
+
+                            const dialogueGain = audioContext.createGain();
                             dialogueGain.gain.setValueAtTime((line.dialogueVolume ?? 1.0) * charVol, audioContext.currentTime);
 
-                            // --- Filter Logic ---
                             let lastNode = dialogueSource;
-
                             if (line.filter) {
                                 const filterConfig = filterLibrary.value.find(f => f.name === line.filter);
                                 if (filterConfig) {
@@ -3403,47 +3606,9 @@
                                     }
                                 }
                             }
-
-                            // Connect to gain then destination
                             lastNode.connect(dialogueGain).connect(getAudioOutputNode());
-                            dialogueSource.playbackRate.value = speed;
 
-                            const now = audioContext.currentTime + 0.05; // Slight delay for sync
-
-                            // 6. Schedule SFX
-                            sfxBuffers.forEach(({ buffer, item, libVolume, trimStart: sfxTrimStart, trimEnd: sfxTrimEnd }) => {
-                                const originalDuration = dialogueBuffer.duration;
-                                const absStart = originalDuration * trimStart;
-                                const absEnd = originalDuration * trimEnd;
-                                const trimmedDuration = absEnd - absStart;
-                                const pos = parseFloat(item.position) || 0;
-                                // 修正：位置应该是相对于裁剪后的时长
-                                const absSfxTime = absStart + (trimmedDuration * pos);
-
-                                if (absSfxTime >= absStart && absSfxTime <= absEnd) {
-                                    const sSrc = audioContext.createBufferSource();
-                                    sSrc.buffer = buffer;
-                                    const sGain = audioContext.createGain();
-                                    const finalSfxVol = (line.sfxVolume ?? 0.5) * (libVolume ?? 1.0);
-                                    sGain.gain.setValueAtTime(finalSfxVol, now);
-                                    sSrc.connect(sGain).connect(getAudioOutputNode());
-
-                                    const relativeStart = absSfxTime - absStart;
-                                    const sOffset = buffer.duration * sfxTrimStart;
-                                    const sDuration = buffer.duration * (sfxTrimEnd - sfxTrimStart);
-                                    sSrc.start(now + relativeStart / speed, sOffset, sDuration);
-
-                                    sfxSources.push(sSrc);
-                                    sSrc.onended = () => {
-                                        const idx = sfxSources.indexOf(sSrc);
-                                        if (idx > -1) sfxSources.splice(idx, 1);
-                                    };
-                                }
-                            });
-
-                            // 7. Play dialogue
-                            dialogueSource.onended = async () => {
-                                // This event fires on natural end or manual .stop()
+                            const finishPlayback = () => {
                                 if (playbackAnimationFrame) {
                                     cancelAnimationFrame(playbackAnimationFrame);
                                     playbackAnimationFrame = null;
@@ -3451,28 +3616,24 @@
                                 if (isAuditioningId.value === line.id) {
                                     isAuditioningId.value = null;
                                 }
+                                if (dialogueSource) dialogueSource = null;
                                 resolve();
                             };
-
-                            dialogueSource.start(now, startTimeOffset, playDuration);
+                            dialogueSource.onended = finishPlayback;
+                            dialogueSource.start(now, 0);
 
                             // 启动进度条动画
                             const updateProgress = () => {
                                 if (isAuditioningId.value !== line.id) return;
-                                const elapsed = audioContext.currentTime - now;
+                                const elapsed = Math.max(0, audioContext.currentTime - now);
                                 if (elapsed >= 0) {
-                                    // 计算当前在整个文件中的百分比位置
-                                    // 当前位置 = (startTimeOffset + elapsed) / totalDuration
-                                    // startTimeOffset = duration * trimStart
-                                    // => (duration * trimStart + elapsed) / duration
-                                    // => trimStart + (elapsed / duration)
-                                    const progress = trimStart + (elapsed * speed / duration);
+                                    const progress = trimStart + ((elapsed / Math.max(0.0001, processedDuration)) * trimSpan);
                                     playbackProgress.value = Math.min(progress, trimEnd);
                                 } else {
                                     playbackProgress.value = trimStart;
                                 }
 
-                                if (audioContext.currentTime < now + (playDuration / speed)) {
+                                if (audioContext.currentTime < now + processedDuration && isAuditioningId.value === line.id) {
                                     playbackAnimationFrame = requestAnimationFrame(updateProgress);
                                 } else {
                                     playbackProgress.value = trimEnd;
@@ -4201,11 +4362,14 @@
                     isExportingAudio.value = true;
 
                     try {
-                        const assets = { dialogues: {}, sfx: {}, bgm: {} };
+                        const assets = { processedDialogues: {}, dialogueTimings: {}, sfx: {}, bgm: {} };
 
                         // 1. 加载所有台词音频
                         for (const line of dialogueLines) {
-                            if (line.audioUrl) assets.dialogues[line.id] = await loadAudioBuffer(line.audioUrl);
+                            if (line.audioUrl) {
+                                assets.processedDialogues[line.id] = await getProcessedDialogueBuffer(line);
+                                assets.dialogueTimings[line.id] = await getDialogueTimingInfo(line);
+                            }
                         }
 
                         // 2. 加载用到的音效
@@ -4246,27 +4410,27 @@
                                     }
                                 }
                             } else if (line.type === 'dialogue') {
-                                const buffer = assets.dialogues[line.id];
-                                if (buffer) {
-                                    // 计算剪辑
-                                    const trimStart = line.trimStart || 0;
-                                    const trimEnd = line.trimEnd || 1;
-                                    const playDuration = buffer.duration * (trimEnd - trimStart);
-                                    const speed = line.speed || 1.0;
-                                    const effectiveDuration = playDuration / speed;
-
+                                const processedBuffer = assets.processedDialogues[line.id];
+                                const timingInfo = assets.dialogueTimings[line.id];
+                                if (processedBuffer && timingInfo) {
                                     // 模拟 playLineAudio 中的 0.05s 调度延迟，确保导出节奏与实时播放一致
                                     currentTime += 0.05;
-                                    events.push({ type: 'dialogue', time: currentTime, buffer: buffer, line: line, trimStart, trimEnd, playDuration, speed });
-                                    currentTime += effectiveDuration;
+                                    events.push({
+                                        type: 'dialogue',
+                                        time: currentTime,
+                                        buffer: processedBuffer,
+                                        duration: timingInfo.effectiveDuration,
+                                        line: line
+                                    });
+                                    currentTime += timingInfo.effectiveDuration;
                                 }
                                 currentTime += (line.break_duration || 0);
                             }
                         }
-                        if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + 2 }); // BGM 尾部淡出
+                        if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + EXPORT_TAIL_PADDING_SEC });
 
                         // 5. 离线渲染
-                        const totalDuration = currentTime + 1;
+                        const totalDuration = currentTime + EXPORT_TAIL_PADDING_SEC;
                         const offlineCtx = new OfflineAudioContext(2, totalDuration * 44100, 44100);
 
                         // 调度 BGM
@@ -4300,14 +4464,10 @@
                         events.forEach(evt => {
                             const dSrc = offlineCtx.createBufferSource();
                             dSrc.buffer = evt.buffer;
-                            dSrc.playbackRate.value = evt.speed;
                             const dGain = offlineCtx.createGain();
                             const char = characters.value.find(c => c.name === evt.line.role);
                             const charVol = char ? (char.volume ?? 1.0) : 1.0;
                             dGain.gain.value = (evt.line.dialogueVolume ?? 1.0) * charVol;
-
-                            const offset = evt.buffer.duration * evt.trimStart;
-                            const duration = evt.playDuration;
 
                             let lastNode = dSrc;
                             // 应用滤镜
@@ -4331,22 +4491,17 @@
                                 }
                             }
                             lastNode.connect(dGain).connect(offlineCtx.destination);
-                            dSrc.start(evt.time, offset, duration);
+                            dSrc.start(evt.time, 0, Math.min(evt.buffer.duration, evt.duration));
 
                             // 调度音效
                             if (evt.line.sfx) {
                                 evt.line.sfx.forEach(s => {
                                     const sBuffer = assets.sfx[s.name];
                                     if (sBuffer) {
-                                        const originalDuration = evt.buffer.duration;
-                                        const absStart = originalDuration * evt.trimStart;
-                                        const absEnd = originalDuration * evt.trimEnd;
-                                        const trimmedDuration = absEnd - absStart;
                                         const pos = parseFloat(s.position) || 0;
-                                        // 修正：位置应该是相对于裁剪后的时长
-                                        const absSfxTime = absStart + (trimmedDuration * pos);
-
-                                        if (absSfxTime >= absStart && absSfxTime <= absEnd) {
+                                        const clampedPos = Math.max(0, Math.min(1, pos));
+                                        const sfxTime = evt.time + (evt.duration * clampedPos);
+                                        if (Number.isFinite(sfxTime)) {
                                             const sSrc = offlineCtx.createBufferSource();
                                             sSrc.buffer = sBuffer;
                                             const sGain = offlineCtx.createGain();
@@ -4361,9 +4516,7 @@
                                             const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
 
                                             sSrc.connect(sGain).connect(offlineCtx.destination);
-
-                                            const relativeStart = absSfxTime - absStart;
-                                            sSrc.start(evt.time + relativeStart / evt.speed, sOffset, sDuration);
+                                            sSrc.start(sfxTime, sOffset, sDuration);
                                         }
                                     }
                                 });
@@ -4404,8 +4557,8 @@
                         const audioMap = new Map();
                         const loadPromises = dialogueLines.map(async (line) => {
                             if (line.audioUrl) {
-                                const buffer = await loadAudioBuffer(line.audioUrl);
-                                if (buffer) audioMap.set(line.id, buffer);
+                                const timingInfo = await getDialogueTimingInfo(line);
+                                if (timingInfo) audioMap.set(line.id, timingInfo);
                             }
                         });
                         await Promise.all(loadPromises);
@@ -4480,12 +4633,9 @@
 
                         for (const line of scriptLines.value) {
                             if (line.type === 'dialogue') {
-                                const buffer = audioMap.get(line.id);
-                                if (buffer) {
-                                    const trimStart = line.trimStart || 0;
-                                    const trimEnd = line.trimEnd || 1;
-                                    const duration = buffer.duration * (trimEnd - trimStart);
-                                    const totalDuration = duration / (line.speed || 1.0);
+                                const timingInfo = audioMap.get(line.id);
+                                if (timingInfo) {
+                                    const totalDuration = timingInfo.effectiveDuration;
 
                                     const startTime = currentTime + 0.05; // 对应 exportAudio 的 0.05s 偏移
 
@@ -4575,6 +4725,8 @@
                     }
                     return new Blob([buffer], { type: "audio/wav" });
                 }
+
+                const EXPORT_TAIL_PADDING_SEC = 1.02;
 
                 // --- 脚本制作逻辑 ---
                 const splitScript = () => {
@@ -4956,11 +5108,14 @@ const generateVideo = async () => {
                     exportStatus.value = '准备素材...';
 
                     try {
-                        const assets = { dialogues: {} };
+                        const dialogueTimings = new Map();
 
-                        // 1. 加载所有台词音频
+                        // 1. 加载所有台词时长信息
                         for (const line of dialogueLines) {
-                            if (line.audioUrl) assets.dialogues[line.id] = await loadAudioBuffer(line.audioUrl);
+                            if (line.audioUrl) {
+                                const timingInfo = await getDialogueTimingInfo(line);
+                                if (timingInfo) dialogueTimings.set(line.id, timingInfo);
+                            }
                         }
 
                         // 2. 加载背景图片
@@ -5003,16 +5158,10 @@ const generateVideo = async () => {
                                     lastBgChangeTime = currentTime;
                                 }
                             } else if (line.type === 'dialogue') {
-                                const buffer = assets.dialogues[line.id];
-                                if (buffer) {
-                                    const trimStart = line.trimStart || 0;
-                                    const trimEnd = line.trimEnd || 1;
-                                    const playDuration = buffer.duration * (trimEnd - trimStart);
-                                    const speed = line.speed || 1.0;
-                                    const effectiveDuration = playDuration / speed;
-
+                                const timingInfo = dialogueTimings.get(line.id);
+                                if (timingInfo) {
                                     currentTime += 0.05;
-                                    currentTime += effectiveDuration;
+                                    currentTime += timingInfo.effectiveDuration;
                                 }
                                 currentTime += (line.break_duration || 0);
                             }
@@ -5028,8 +5177,7 @@ const generateVideo = async () => {
                         exportStatus.value = '生成视频轨道...';
                         
                         const fps = 4;
-                        const tailPaddingSec = 1 + (1 / fps) + 0.02; // 额外补 1 帧 + 微小保护量，避免导入剪辑软件时尾部被吃掉
-                        const totalDuration = currentTime + tailPaddingSec;
+                        const totalDuration = currentTime + EXPORT_TAIL_PADDING_SEC;
                         let [width, height] = videoResolution.value.split('x').map(Number);
                         
                         // Ensure width and height are even numbers (required by many hardware encoders)
