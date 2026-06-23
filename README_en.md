@@ -1,8 +1,6 @@
 # Unitale AI Audiobook Maker
 > 语言切换 / Language Switch: [中文版](README.md) | [English](README_en.md)
 > 
-> English Version Repo:  https://github.com/sdsds222/Unitale_AI_EN
-> 
 [![](https://img.shields.io/badge/Author-sdsds222-orange.svg)](https://gitee.com/wangjiabin-x/uh5)
 [![license](https://img.shields.io/github/license/elemefe/vue-amap.svg?style=flat-square)](https://github.com/sdsds222)
 ![GitHub](https://img.shields.io/badge/dynamic/json?logo=github&label=GitHub+Followers&labelColor=282c34&color=181717&query=%24.data.totalSubs&url=https%3A%2F%2Fapi.spencerwoo.com%2Fsubstats%2F%3Fsource%3Dgithub%26queryKey%3Dsdsds222&longCache=true)
@@ -24,6 +22,8 @@ The interface is clean and easy to use. It can generate audio in one click, and 
 ![Main interface screenshot](界面图2.png)
 
 ### Online tool page (you need to set your own LLM and cloud native TTS project URL):
+
+https://sdsds222.github.io/Unitale_AI_EN
 
 https://sdsds222.github.io/Unitale/
 
