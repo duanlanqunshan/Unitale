@@ -1,5 +1,7 @@
 # Unitale AI有声书制作工具
 > 语言切换 / Language Switch: [中文版](README.md) | [English](README_en.md)
+> 
+> English Version Repo:  https://github.com/sdsds222/Unitale_AI_EN
 
 [![](https://img.shields.io/badge/Author-sdsds222-orange.svg)](https://gitee.com/wangjiabin-x/uh5)
 [![license](https://img.shields.io/github/license/elemefe/vue-amap.svg?style=flat-square)](https://github.com/sdsds222)
