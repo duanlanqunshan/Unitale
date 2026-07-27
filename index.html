@@ -13,9 +13,41 @@
         gtag('config', 'G-4D36DBYDJX');
     </script>
     <title>unitale ai工具</title>
+    <!-- Tailwind CSS with fallback -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
+    <script>
+        if (typeof tailwind === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.js"><\/script>');
+        }
+    </script>
+    
+    <!-- Vue 3 with multi-CDN fallback -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/vue/3.3.4/vue.global.js"></script>
+    <script>
+        if (typeof Vue === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"><\/script>');
+        }
+        if (typeof Vue === 'undefined') {
+            document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.js"><\/script>');
+        }
+        if (typeof Vue === 'undefined') {
+            document.write('<script src="vendor/vue/vue.js"><\/script>');
+        }
+    </script>
+    
+    <!-- mp4-muxer with multi-CDN fallback -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/mp4-muxer/1.1.2/mp4-muxer.js"></script>
+    <script>
+        if (typeof Mp4Muxer === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@1.1.2/build/mp4-muxer.js"><\/script>');
+        }
+        if (typeof Mp4Muxer === 'undefined') {
+            document.write('<script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"><\/script>');
+        }
+        if (typeof Mp4Muxer === 'undefined') {
+            document.write('<script src="vendor/mp4-muxer/mp4-muxer.js"><\/script>');
+        }
+    </script>
     <script src="./vendor/ffmpeg/ffmpeg.js"></script>
     <script src="./vendor/ffmpeg/util.js"></script>
     <style>
@@ -40,7 +72,7 @@
         body {
             background-color: #f1f5f9;
             /* Fallback color */
-            background-image: url('https://picsum.photos/1920/1080');
+            background-image: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
             background-size: cover;
             background-position: center;
             background-attachment: fixed;
@@ -340,6 +372,8 @@
                                         clip-rule="evenodd" />
                                 </svg>
                             </button>
+                            <button @click="downloadTimbre(timbre)"
+                                class="text-xs text-indigo-600 hover:underline font-medium" title="下载音频">下载</button>
                             <button @click="editTimbre(timbre)"
                                 class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
                             <button @click="deleteTimbre(timbre.id)"
@@ -514,7 +548,8 @@
                                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
                                     </svg>
                                 </button>
-                                <button @click="editSfx(sfx)" class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
+                                 <button @click="downloadSfxOrBgm(sfx, '音效')" class="text-xs text-indigo-600 hover:underline font-medium" title="下载音频">下载</button>
+                                 <button @click="editSfx(sfx)" class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
                                 <button @click="deleteSfx(sfx.id)" class="text-xs text-red-500 hover:underline font-medium">删除</button>
                             </div>
                         </div>
@@ -621,7 +656,8 @@
                                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
                                     </svg>
                                 </button>
-                                <button @click="editBgm(bgm)" class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
+                                 <button @click="downloadSfxOrBgm(bgm, 'BGM')" class="text-xs text-indigo-600 hover:underline font-medium" title="下载音频">下载</button>
+                                 <button @click="editBgm(bgm)" class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
                                 <button @click="deleteBgm(bgm.id)" class="text-xs text-red-500 hover:underline font-medium">删除</button>
                             </div>
                         </div>
@@ -915,7 +951,7 @@
                     </div>
                     <div ref="scriptListContainer" class="space-y-3 max-h-[600px] overflow-y-auto px-2 pb-10">
                         <div v-for="(line, index) in scriptLines" :key="line.id" @click="toggleLineSelection(index, $event)"
-                            :ref="el => { if (el) lineRefs[index] = el }"
+                            :ref="el => { if (el) lineRefs[line.id] = el }"
                             class="transition-all duration-200">
 
                             <!-- BGM 控制块 -->
@@ -1148,7 +1184,7 @@
                                                         Math.round(((line.trimEnd||1) - (line.trimStart||0)) * 100)
                                                         }}%</span>
                                                 </div>
-                                                <div :key="line.audioUrl"
+                                                <div :key="line.id + '_wave'"
                                                     class="relative w-full bg-slate-100 rounded border border-slate-200 overflow-hidden select-none group/wave"
                                                     style="height: 32px;">
                                                     <canvas :ref="(el) => drawWaveform(el, line)" width="192"
@@ -1208,8 +1244,14 @@
                                                             clip-rule="evenodd" />
                                                     </svg>
                                                 </button>
-                                                <button v-if="line.audioUrl" @click.stop="playLineAudio(line)"
-                                                    title="播放" class="text-slate-400 hover:text-green-600 p-2">
+                                                 <button v-if="line.audioUrl" @click.stop="downloadLineAudio(line)"
+                                                     title="下载台词音频" class="text-slate-400 hover:text-indigo-600 p-2">
+                                                     <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                                         <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                                     </svg>
+                                                 </button>
+                                                 <button v-if="line.audioUrl" @click.stop="playLineAudio(line)"
+                                                     title="播放" class="text-slate-400 hover:text-green-600 p-2">
                                                     <svg v-if="isAuditioningId === line.id"
                                                         class="h-4 w-4 animate-pulse text-green-600"
                                                         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
@@ -1392,7 +1434,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, computed, watch, onBeforeUpdate } = Vue;
+        const { createApp, ref, onMounted, computed, watch, onBeforeUpdate, nextTick } = Vue;
 
         createApp({
             setup() {
@@ -1754,10 +1796,10 @@
                 const isGeneratingAll = ref(false);
                 const isSequencePlaying = ref(false);
                 const currentSequenceIndex = ref(-1);
-                const lineRefs = ref([]);
+                const lineRefs = ref({});
                 const scriptListContainer = ref(null);
                 onBeforeUpdate(() => {
-                    lineRefs.value = [];
+                    lineRefs.value = {};
                 });
                 let sequenceAbortController = null;
                 const isExportingAudio = ref(false);
@@ -2273,10 +2315,20 @@
                 // --- 波形绘制与剪辑逻辑 ---
                 const drawWaveform = async (canvas, item) => {
                     const audioPath = item.audioUrl || item.filename || item.refPath;
-                    if (!canvas || !audioPath) return;
+                    const itemId = item.id || item.filename || item.refPath || audioPath;
+                    if (!canvas || !audioPath) {
+                        if (canvas) {
+                            const ctx = canvas.getContext('2d');
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            canvas._lastUrl = null;
+                            canvas._lastItemId = null;
+                        }
+                        return;
+                    }
 
-                    if (canvas._lastUrl === audioPath) return;
+                    if (canvas._lastUrl === audioPath && canvas._lastItemId === itemId) return;
                     canvas._lastUrl = audioPath;
+                    canvas._lastItemId = itemId;
 
                     const buffer = await loadAudioBuffer(audioPath);
                     if (!buffer) {
@@ -2354,6 +2406,23 @@
                 watch(scriptLines, () => {
                     triggerAutoSave();
                 }, { deep: true });
+
+                // Fix 1.5: 列表重排后强制重绘所有 canvas 波形，避免 Vue DOM 复用导致波形错位
+                watch(scriptLines, async () => {
+                    await nextTick();
+                    for (const line of scriptLines.value) {
+                        if (!line.audioUrl) continue;
+                        const rowEl = lineRefs.value[line.id];
+                        if (!rowEl) continue;
+                        const canvas = rowEl.querySelector('canvas');
+                        if (canvas) {
+                            // 强制清空 canvas 缓存标记，触发 drawWaveform 重绘
+                            canvas._lastUrl = null;
+                            canvas._lastItemId = null;
+                            drawWaveform(canvas, line);
+                        }
+                    }
+                }, { flush: 'post' });
 
                 watch(bgImageCount, () => {
                     localStorage.setItem('unitale_bgImageCount', String(Math.max(0, Number(bgImageCount.value) || 0)));
@@ -2956,6 +3025,71 @@
                     timbreForm.value = { id: '', name: '', description: '', refPath: '' };
                     isEditingTimbre.value = false;
                     timbreFile.value = null; // Reset the stored file
+                };
+
+                // --- 音频单独下载逻辑 ---
+                const downloadAudioBlob = (blob, defaultName) => {
+                    if (!blob) {
+                        alert('音频文件不存在或尚未生成！');
+                        return;
+                    }
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = defaultName;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+                };
+
+                const downloadTimbre = async (timbre) => {
+                    const filename = timbre.refPath;
+                    if (!filename) return;
+                    let blob = localFileMap.value.get(filename) || await loadAssetFromDB(filename);
+                    if (!blob) {
+                        alert('未找到该音色的音频源文件！');
+                        return;
+                    }
+                    const safeName = (timbre.name || '音色').replace(/[\/\\?%*:|"<>]/g, '_');
+                    const safeDesc = (timbre.description || '').replace(/[\/\\?%*:|"<>]/g, '_');
+                    const filenameStr = safeDesc ? `音色_${safeName}_${safeDesc}.wav` : `音色_${safeName}.wav`;
+                    downloadAudioBlob(blob, filenameStr);
+                };
+
+                const downloadSfxOrBgm = async (item, typeStr) => {
+                    const filename = item.filename;
+                    if (!filename) return;
+                    let blob = localFileMap.value.get(filename) || await loadAssetFromDB(filename);
+                    if (!blob) {
+                        alert(`未找到该${typeStr}的音频源文件！`);
+                        return;
+                    }
+                    const safeName = (item.name || typeStr).replace(/[\/\\?%*:|"<>]/g, '_');
+                    const safeDesc = (item.description || '').replace(/[\/\\?%*:|"<>]/g, '_');
+                    const filenameStr = safeDesc ? `${typeStr}_${safeName}_${safeDesc}.wav` : `${typeStr}_${safeName}.wav`;
+                    downloadAudioBlob(blob, filenameStr);
+                };
+
+                const downloadLineAudio = async (line) => {
+                    let blob = null;
+                    if (line.audioUrl) {
+                        try {
+                            const res = await fetch(line.audioUrl);
+                            blob = await res.blob();
+                        } catch (e) {}
+                    }
+                    if (!blob) {
+                        blob = await loadAssetFromDB(`line_audio_${line.id}`);
+                    }
+                    if (!blob) {
+                        alert('该台词音频尚未生成！');
+                        return;
+                    }
+                    const safeRole = (line.role || '角色').replace(/[\/\\?%*:|"<>]/g, '_');
+                    const textSnippet = (line.text || '').slice(0, 15).replace(/[\/\\?%*:|"<>]/g, '_');
+                    const filenameStr = `台词_${safeRole}_${textSnippet || line.id}.wav`;
+                    downloadAudioBlob(blob, filenameStr);
                 };
 
                 // --- 音效库管理逻辑 ---
@@ -5028,7 +5162,7 @@
 
                         // Scroll into view manually to prevent page scroll
                         const container = scriptListContainer.value;
-                        const child = lineRefs.value[i];
+                        const child = lineRefs.value[scriptLines.value[i].id];
 
                         if (container && child) {
                             const containerRect = container.getBoundingClientRect();
@@ -5905,7 +6039,7 @@ const generateVideo = async () => {
                     // Audition Actions
                     availableRoles, isAuditioningId, generateLineAudio, playLineAudio, clearLineAudio,
 
-                    playPreview, previewPlayingFile,
+                    playPreview, previewPlayingFile, downloadTimbre, downloadSfxOrBgm, downloadLineAudio,
                     send, stopGeneration, clearAll,
 
                     playbackProgress, // Export for template
@@ -5939,6 +6073,20 @@ const generateVideo = async () => {
                 };
             }
         }).mount('#app');
+    </script>
+    <!-- Final safeguard: show error message if resources fail to load -->
+    <script>
+        setTimeout(() => {
+            const app = document.getElementById('app');
+            if (app && app.innerHTML.includes('{{') && !app.querySelector('.error-message')) {
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'error-message';
+                errorMsg.style.cssText = 'padding: 50px; text-align: center; font-family: sans-serif; color: #e11d48;';
+                errorMsg.innerHTML = '<h2>前端框架加载失败</h2><p>所有资源均不可用，请检查网络连接或代理设置。</p>';
+                app.innerHTML = '';
+                app.appendChild(errorMsg);
+            }
+        }, 3000);
     </script>
 </body>
 
