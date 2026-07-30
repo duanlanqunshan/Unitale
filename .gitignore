@@ -62,5 +62,12 @@ voice/old/
 # === 10. Build 产物 ===
 dist/
 build/
+
+# === 不要上传的大型工程存档（超80MB JSON）===
+Unitale Basic Project for EN.json
+初始音效工程文件(含音效音色).json
+
+# === 截图目录（非文档，避免污染）===
+截图/
 *.min.css
 *.min.js
