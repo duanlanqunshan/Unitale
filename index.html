@@ -113,10 +113,10 @@
         </div>
         <header class="mb-6 flex justify-between items-end">
             <div>
-                <h1 class="text-2xl font-bold text-slate-800">Unitale AI <span class="text-blue-600">1.5</span></h1>
+                <h1 class="text-2xl font-bold text-slate-800">Unitale AI <span class="text-blue-600">1.5.1</span></h1>
                 <p style="color: rgb(39, 92, 120);" class="text-slate-400 text-xs mt-1">多角色音效合成有声书生成工具</p>
             </div>
-            <div class="text-[10px] text-slate-300">v1.5</div>
+            <div class="text-[10px] text-slate-300">v1.5.1</div>
         </header>
 
         <!-- 标签页导航 -->
@@ -294,10 +294,135 @@
                     暂无 TTS 配置，请在上方添加
                 </div>
             </div>
+
+            <!-- LLM 兜底匹配配置（Phase 2：用于音效匹配失败时的 LLM 智能重定向，调用 OpenAI 兼容端点） -->
+            <h2 class="text-lg font-bold text-slate-800 border-b pb-2 pt-6">LLM 兜底匹配配置（音效智能重定向）</h2>
+            <div class="bg-amber-50 p-4 rounded-xl border border-amber-200 mb-4">
+                <p class="text-xs text-amber-800 leading-relaxed">
+                    当 AI 解析出的音效或 BGM 在本地库完全无法匹配时，系统将调用此处的 OpenAI 兼容端点进行"智能重定向"。
+                    例如：请求"刀剑相交的声音"但库里只有"剑击"，LLM 会自动映射到最接近的现有音效。<br>
+                    <span class="font-bold">说明：</span>此配置独立于上方的 LLM 模型配置，专用于音效兜底匹配，建议填写一个快速、廉价的模型。
+                </p>
+            </div>
+            <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                <h3 class="text-sm font-bold text-slate-700 mb-4">{{ isEditingFallback ? '编辑兜底配置' : '添加兜底配置' }}</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">配置名称</label>
+                        <input v-model="fallbackForm.name"
+                            class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="例如: 音效兜底用 GPT-4o-mini">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">模型名称</label>
+                        <input v-model="fallbackForm.model"
+                            class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="例如: gpt-4o-mini">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Base URL (OpenAI 兼容)</label>
+                        <input v-model="fallbackForm.baseUrl"
+                            class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="https://api.openai.com/v1">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">API Key</label>
+                        <input v-model="fallbackForm.key" type="password"
+                            class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            placeholder="sk-...">
+                    </div>
+                </div>
+                <div class="flex gap-2">
+                    <button type="button" @click.prevent="saveFallbackConfig"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all">保存配置</button>
+                    <button type="button" v-if="isEditingFallback" @click="resetFallbackForm"
+                        class="px-4 py-2 bg-slate-200 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-300 transition-all">取消</button>
+                </div>
+            </div>
+            <div class="grid gap-3 mb-4">
+                <div v-for="conf in fallbackConfigs" :key="conf.id"
+                    class="flex items-center justify-between p-4 bg-white border border-slate-200 rounded-xl hover:shadow-sm transition-shadow">
+                    <div>
+                        <div class="font-bold text-slate-800 text-sm">{{ conf.name }}</div>
+                        <div class="text-xs text-slate-400 mt-1">{{ conf.model }} | {{ conf.baseUrl }}</div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="editFallbackConfig(conf)" class="text-xs text-blue-600 hover:underline font-medium">编辑</button>
+                        <button @click="deleteFallbackConfig(conf.id)" class="text-xs text-red-500 hover:underline font-medium">删除</button>
+                    </div>
+                </div>
+                <div v-if="fallbackConfigs.length === 0" class="text-center py-6 text-slate-400 text-sm">
+                    暂无兜底配置（不填则在线检索失败时跳过 LLM 重定向）
+                </div>
+            </div>
+
+            <!-- Freesound 在线检索配置（Phase 2：替代 Pixabay，支持音频搜索） -->
+            <h2 class="text-lg font-bold text-slate-800 border-b pb-2 pt-6">Freesound 在线检索配置</h2>
+            <div class="bg-sky-50 p-4 rounded-xl border border-sky-200 mb-4">
+                <p class="text-xs text-sky-800 leading-relaxed">
+                    当本地音效库完全找不到匹配时，系统可自动调用 Freesound API 在线搜索并下载音效。
+                    申请地址：<a href="https://freesound.org/docs/api/" target="_blank" class="text-blue-600 underline">https://freesound.org/apiv2/apply</a><br>
+                    <span class="font-bold">默认 Token：</span>已内置一个公共 Token，建议申请自己的以提升配额。
+                </p>
+            </div>
+            <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div class="md:col-span-2">
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase">Freesound API Token</label>
+                            <button type="button" @click="showFreesoundToken = !showFreesoundToken"
+                                class="text-[10px] text-blue-600 hover:underline font-medium">
+                                {{ showFreesoundToken ? '👁️ 隐藏密钥' : '🔒 显示密钥' }}
+                            </button>
+                        </div>
+                        <div class="relative">
+                            <input :type="showFreesoundToken ? 'text' : 'password'" v-model="freesoundToken"
+                                class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                                placeholder="DvzBtUYaGmCZLDAiul1es0GFwSbJW6PORG8t5BKA">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">在线检索开关</label>
+                        <select v-model="freesoundEnabled" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            <option :value="true">启用（本地未命中时自动在线搜索）</option>
+                            <option :value="false">禁用（仅使用本地库 + LLM 兜底）</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">自动下载并入库</label>
+                        <select v-model="freesoundAutoImport" class="w-full px-3 py-2 border rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                            <option :value="true">启用（下载后自动加入音效库）</option>
+                            <option :value="false">禁用（仅返回链接由用户手动下载）</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- 音效下载保存目录（Phase 9：Freesound 下载到的本地目录，前端 UI 可改） -->
+                <div class="mb-4">
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">音效下载保存目录（Freesound 下载后存储位置）</label>
+                    <input v-model="sfxSaveDir" placeholder="留空使用默认目录（%USERPROFILE%/unitale_sfx）"
+                        class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <p class="text-[10px] text-slate-400 mt-1">提示：留空则下载到 %USERPROFILE%/unitale_sfx，填自定义路径则下载到指定目录。</p>
+                </div>
+                <button type="button" @click.prevent="saveFreesoundConfig"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all">保存 Freesound 配置</button>
+            </div>
+
         </div>
 
         <!-- 页面 4: 音色资源库 -->
         <div v-if="activeTab === 'timbres'" class="space-y-8">
+            <!-- 音色保存目录配置 -->
+            <section class="bg-amber-50 p-5 rounded-xl border border-amber-200">
+                <h2 class="text-lg font-bold text-slate-800 border-b border-amber-200 pb-2 mb-3">音色保存目录</h2>
+                <div class="mb-4">
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">音色音频落盘保存位置（"打开文件夹"按钮定位用）</label>
+                    <input v-model="timbreSaveDir" :placeholder="defaultTimbreSaveDir || '默认: 项目根目录/timbres'"
+                        class="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    <p class="text-[10px] text-slate-400 mt-1">提示：留空则落盘到项目目录下的 <code>timbres/</code>；填自定义路径则落盘到指定目录。修改后点"保存目录设置"持久化。</p>
+                    <button type="button" @click.prevent="saveTimbreSaveDir"
+                        class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all">保存目录设置</button>
+                </div>
+            </section>
             <!-- 音色管理区域 -->
             <section class="space-y-6">
                 <h2 class="text-lg font-bold text-slate-800 border-b pb-2">音色管理</h2>
@@ -372,6 +497,8 @@
                                         clip-rule="evenodd" />
                                 </svg>
                             </button>
+                            <button @click="openTimbreFolder(timbre)"
+                                class="text-xs text-slate-500 hover:text-blue-600 font-medium px-1" title="在系统文件夹中打开保存位置">📂 打开文件夹</button>
                             <button @click="downloadTimbre(timbre)"
                                 class="text-xs text-indigo-600 hover:underline font-medium" title="下载音频">下载</button>
                             <button @click="editTimbre(timbre)"
@@ -450,9 +577,87 @@
 
         <!-- 页面 6: 音效素材库 -->
         <div v-if="activeTab === 'sfx'" class="space-y-8">
+            <!-- Phase 3 & 4：本地音效文件夹扫描与检索（迁至 sfx Tab） -->
+            <section class="space-y-6">
+                <h2 class="text-lg font-bold text-slate-800 border-b pb-2">本地文件夹扫描</h2>
+                <div class="bg-emerald-50 p-4 rounded-xl border border-emerald-200 mb-4">
+                    <p class="text-xs text-emerald-800 leading-relaxed">
+                        指定一个本地音效根目录（支持子文件夹递归扫描）。<br>
+                        <span class="font-bold">智能化：</span>子文件夹名自动作为标签（如"狗的声音/雷声"），文件名作为检索关键词。<br>
+                        <span class="font-bold">持久化：</span>路径保存在后端 `~/unitale_sfx_scan_root.txt`，重启后自动恢复。
+                    </p>
+                </div>
+                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                    <div class="mb-4">
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">本地扫描根路径</label>
+                        <div class="flex gap-2 items-center">
+                            <input v-model="sfxScanRootPath" placeholder="例如：D:\\音效素材\\"
+                                class="flex-1 px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+                            <button type="button" @click="setSfxScanRoot"
+                                class="whitespace-nowrap px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs hover:bg-emerald-700 transition-colors">保存路径</button>
+                            <button type="button" @click="getSfxScanRoot"
+                                class="whitespace-nowrap px-3 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-300 transition-colors">读取</button>
+                        </div>
+                        <p v-if="sfxScanRootStatus" class="text-[10px] mt-1" :class="sfxScanRootExists ? 'text-emerald-600' : 'text-red-500'">
+                            {{ sfxScanRootStatus }}
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <button type="button" @click="scanLocalSfx" :disabled="isScanningLocal"
+                            class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 disabled:cursor-wait">
+                            {{ isScanningLocal ? '扫描中...' : '开始扫描' }}
+                        </button>
+                        <button type="button" @click="importScannedSfx" :disabled="scannedSfxItems.length === 0"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all disabled:opacity-50">
+                            批量入库 ({{ scannedSfxItems.length }})
+                        </button>
+                        <button type="button" @click="clearScannedSfx" :disabled="scannedSfxItems.length === 0"
+                            class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-300 transition-all disabled:opacity-50">清空</button>
+                    </div>
+                    <div v-if="scannedSfxItems.length > 0" class="mt-4">
+                        <p class="text-xs text-slate-500 mb-2">扫描结果（共 {{ scannedSfxItems.length }} 个，显示前 20）：</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[400px] overflow-y-auto pr-1">
+                            <div v-for="item in scannedSfxItems.slice(0, 20)" :key="item.path"
+                                class="p-3 bg-white border border-slate-200 rounded-lg hover:border-emerald-400 transition-colors">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex-1 min-w-0">
+                                        <div class="font-bold text-slate-800 text-sm truncate">{{ item.name }}</div>
+                                        <div class="text-[10px] text-slate-400 mt-0.5 truncate">{{ item.path }} · {{ item.size_mb }}MB</div>
+                                        <div v-if="item.tags && item.tags.length" class="flex flex-wrap gap-1 mt-1">
+                                            <span v-for="tag in item.tags" :key="tag"
+                                                class="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] rounded">{{ tag }}</span>
+                                        </div>
+                                    </div>
+                                    <button type="button" @click="importSingleScannedSfx(item)"
+                                        class="text-xs text-blue-600 hover:underline font-medium ml-2 flex-shrink-0">入库</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 工单 D：批量重匹配未命中音效工具条（与音效源配置同页） -->
+            <section class="space-y-6">
+                <h2 class="text-lg font-bold text-slate-800 border-b pb-2">未命中音效处理</h2>
+                <div class="bg-amber-50 p-5 rounded-xl border border-amber-200">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <button type="button" @click="retryAllUnmatchedSfx"
+                            :disabled="unmatchedSfxCount === 0"
+                            class="px-4 py-2 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            🔁 重新匹配 {{ unmatchedSfxCount }} 条未命中音效
+                        </button>
+                        <span class="text-xs text-amber-800">
+                            点击后将自动对当前脚本中所有未命中的音效执行 LLM 兜底 + Freesound 在线检索。<br>
+                            <span class="text-amber-700">说明：</span>LLM 兜底需在"模型配置"页配置兜底 LLM；Freesound 需启用在线检索开关。
+                        </span>
+                    </div>
+                </div>
+            </section>
+
             <section class="space-y-6">
                 <h2 class="text-lg font-bold text-slate-800 border-b pb-2">音效素材管理</h2>
-                <p>音效和背景音乐可以自行使用其他的AI模型生成，或者前往在线免费音效网站下载：<a style="color: blue;" href="https://pixabay.com/zh/sound-effects">Pixabay在线音效库</a></p>
+                <p>音效和背景音乐可以自行使用其他的AI模型生成，或者前往在线免费音效网站下载：<a style="color: blue;" href="https://freesound.org/search/?q=">Freesound 在线音效库（支持音频搜索，替代 Pixabay）</a> | <a style="color: blue;" href="https://pixabay.com/zh/sound-effects/">Pixabay（仅图片/视频，不支持音频搜索）</a></p>
                 <div class="bg-slate-50 p-5 rounded-xl border border-slate-200">
                     <h3 class="text-sm font-bold text-slate-700 mb-4">{{ isEditingSfx ? '编辑音效' : '添加新音效' }}</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -496,6 +701,16 @@
                                     </svg>
                                 </button>
                             </div>
+                            <div class="flex items-center gap-2 mt-2">
+                                <label class="flex items-center gap-2 text-xs text-slate-600 select-none cursor-pointer">
+                                    <input type="checkbox" v-model="sfxForm.isAmbient" class="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 accent-blue-600">
+                                    <span>环境持续音（Ambient）— 持续铺底整个台词时长，淡入淡出</span>
+                                </label>
+                            </div>
+                            <p v-if="sfxForm.isAmbient" class="mt-1 text-[10px] text-violet-700 bg-violet-50 border border-violet-100 rounded p-2 leading-relaxed">
+                                <span class="font-bold">🌀 Ambient 说明：</span>勾选后该音效在播放时将<span class="font-bold">从台词开始持续至结束</span>，自动淡入淡出，适合雨声 / 风声 / 环境底噪等持续场景。<br>
+                                <span class="opacity-70">与瞬时音效（开门、爆炸）相反，Ambient 不在某个时间点触发，而是贯穿整个台词段。</span>
+                            </p>
 
                             <div v-if="sfxForm.filename">
                                 <div class="flex justify-between items-center px-0.5 mb-1">
@@ -530,6 +745,11 @@
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[600px] overflow-y-auto pr-1">
                     <div v-for="sfx in sfxLibrary" :key="sfx.id" class="bg-white border border-slate-200 rounded-xl hover:shadow-sm transition-shadow flex flex-col">
+                        <div v-if="sfx.isAmbient" class="px-3 py-1 bg-violet-50 border-b border-violet-100 flex items-center gap-1 text-[10px] text-violet-700">
+                            <span class="text-base leading-none">🌀</span>
+                            <span class="font-bold">Ambient 环境持续音</span>
+                            <span class="opacity-70">— 播放时贯穿整句，淡入淡出</span>
+                        </div>
                         <div class="flex items-start justify-between p-4">
                             <div class="flex items-start gap-3">
                                 <input type="checkbox" v-model="sfx.enabled" class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer mt-1 flex-shrink-0" title="启用/禁用此资源">
@@ -1092,11 +1312,13 @@
 
                                     <!-- 角色选择 -->
                                     <div class="w-24 flex-shrink-0 flex flex-col justify-center gap-1">
-                                        <select v-model="line.role"
-                                            class="w-full px-2 py-1.5 text-xs border rounded bg-white focus:ring-1 focus:ring-blue-500 outline-none font-bold text-slate-700">
+                                         <select v-model="line.role" @change="confirmLineRole(line)"
+                                             class="w-full px-2 py-1.5 text-xs border rounded bg-white focus:ring-1 focus:ring-blue-500 outline-none font-bold text-slate-700">
                                             <option v-for="roleName in availableRoles" :key="roleName"
                                                 :value="roleName">{{ roleName }}</option>
-                                        </select>
+                                         </select>
+                                         <span v-if="line.roleNeedsReview" class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                                             :title="line.roleReviewReason || '模型无法可靠确认说话人，请手动选择角色'">⚠️ 角色待确认</span>
                                         <!-- 滤波器选择 -->
                                         <select v-model="line.filter"
                                             class="w-full px-2 py-1 text-[10px] border rounded bg-slate-50 focus:ring-1 focus:ring-blue-500 outline-none text-slate-500"
@@ -1293,17 +1515,31 @@
                                 <!-- 音效管理条 -->
                                 <div class="flex flex-wrap items-center gap-2 w-full">
                                     <div v-for="(sfx, sIdx) in line.sfx" :key="sIdx"
-                                        class="flex items-center bg-blue-50 border border-blue-100 rounded px-2 py-1 text-xs">
-                                        <span class="mr-1"></span>
-                                        <select v-model="sfx.name"
-                                            class="bg-transparent outline-none border-b border-transparent hover:border-blue-300 text-blue-700 font-medium max-w-[100px] cursor-pointer">
-                                            <option v-for="libSfx in sfxLibrary" :key="libSfx.id" :value="libSfx.name">
-                                                {{ libSfx.name }}</option>
-                                        </select>
-                                        <span class="mx-1 text-slate-400">@</span>
+                                        :class="['flex items-center border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
+                                        <span class="mr-1" :title="getSfxSourceMeta(sfx.source).label">
+                                            {{ getSfxSourceMeta(sfx.source).emoji }}
+                                        </span>
+                                        <span v-if="sfxLibrary.find(lib => lib.name === sfx.name)?.isAmbient"
+                                            class="mr-1 text-base leading-none" title="环境持续音 Ambient（贯穿整句，淡入淡出）">🌀</span>
+                                         <input :value="sfx.name" @change="handleSfxNameChange(sfx, $event.target.value)"
+                                             :list="'sfx-options-' + line.id + '-' + sIdx"
+                                             class="bg-transparent outline-none border-b border-transparent hover:border-current font-medium w-36 min-w-0"
+                                             :title="sfx.source === 'unmatched' ? '未匹配需求名称，可编辑后重新匹配' : '可输入名称或从音效库选择'">
+                                         <datalist :id="'sfx-options-' + line.id + '-' + sIdx">
+                                             <option v-for="libSfx in sfxLibrary" :key="libSfx.id" :value="libSfx.name"></option>
+                                         </datalist>
+                                          <button @click="previewLineSfx(sfx)"
+                                              :disabled="!canPreviewSfx(sfx)"
+                                              class="ml-1 text-slate-500 hover:text-green-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                                              :title="canPreviewSfx(sfx) ? '单独试听此音效素材' : '尚无可播放素材，请先重新匹配或手动入库'">🔊</button>
+                                         <span class="mx-1 text-slate-400">@</span>
                                         <input type="number" v-model="sfx.position" step="0.1" min="0" max="1"
-                                            class="w-10 bg-transparent text-center outline-none border-b border-transparent hover:border-blue-300"
+                                            class="w-10 bg-transparent text-center outline-none border-b border-transparent hover:border-current"
                                             title="插入位置 (0.0 - 1.0)">
+                                        <button v-if="sfx.source === 'unmatched' || sfx.unmatchedHint"
+                                            @click="retrySingleSfx(line, sIdx)"
+                                            class="ml-1 text-slate-500 hover:text-blue-600 font-bold"
+                                            title="单独重新匹配此音效（LLM 兜底 + Freesound 在线检索）">🔁</button>
                                         <button @click="removeLineSfx(line, sIdx)"
                                             class="ml-2 text-slate-400 hover:text-red-500 font-bold">×</button>
                                     </div>
@@ -1316,7 +1552,10 @@
                                 <div class="w-full flex flex-col gap-2 min-w-0">
                                     <textarea v-model="line.text" rows="2"
                                         class="w-full h-full bg-transparent border-none focus:ring-0 text-sm text-slate-700 resize-none leading-relaxed py-1.5"
-                                        @input="autoResizeTextarea($event)"></textarea>
+                                        @input="autoResizeTextarea($event)" @blur="splitEditedDialogue(index)"></textarea>
+                                    <div class="text-right text-[10px]" :class="Array.from(line.text || '').length > 120 ? 'text-red-600 font-bold' : 'text-slate-400'">
+                                        {{ Array.from(line.text || '').length }}/120
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1425,9 +1664,9 @@
         </div>
 
         <p style="text-align: left; color: #888; font-size: 12px;">
-            <a href="https://space.bilibili.com/11354448" target="_blank"
+            <a href="https://github.com/duanlanqunshan/Unitale" target="_blank"
                 style="color: inherit; text-decoration: none;">
-                本网站由sdsds222制作，点击此处访问个人主页
+                本工具由duanlanqunshan完善，点击此处访问个人主页
             </a>
         </p>
 
@@ -1435,6 +1674,7 @@
 
     <script>
         const { createApp, ref, onMounted, computed, watch, onBeforeUpdate, nextTick } = Vue;
+        const unitaleLogicPromise = import('./unitale_logic.mjs');
 
         createApp({
             setup() {
@@ -1648,6 +1888,37 @@
                 const ttsForm = ref({ id: '', name: '', baseUrl: '' });
                 const isEditingTts = ref(false);
 
+                // LLM 兜底匹配配置（Phase 2：音效匹配失败时的智能重定向）
+                const fallbackConfigs = ref(JSON.parse(localStorage.getItem('unitale_fallbackConfigs') || '[]'));
+                const fallbackForm = ref({ id: '', name: '', model: '', baseUrl: '', key: '' });
+                const isEditingFallback = ref(false);
+                const currentFallbackConfigId = ref(localStorage.getItem('unitale_fallbackConfigId') || '');
+
+                // Freesound 在线检索配置（Phase 2：替代 Pixabay，支持音频搜索）
+                const freesoundToken = ref(localStorage.getItem('unitale_freesoundToken') || 'DvzBtUYaGmCZLDAiul1es0GFwSbJW6PORG8t5BKA');
+                const showFreesoundToken = ref(false);
+                const freesoundEnabled = ref(JSON.parse(localStorage.getItem('unitale_freesoundEnabled') || 'true'));
+                const freesoundAutoImport = ref(JSON.parse(localStorage.getItem('unitale_freesoundAutoImport') || 'true'));
+
+                // Phase 3/4：本地音效文件夹扫描状态
+                const sfxScanRootPath = ref('');
+                const sfxScanRootExists = ref(false);
+                const sfxScanRootStatus = ref('');
+                const isScanningLocal = ref(false);
+                const scannedSfxItems = ref([]);
+
+                // Phase 9：Freesound 在线下载音效保存目录（可前端手动修改）
+                const sfxSaveDir = ref(localStorage.getItem('unitale_sfxSaveDir') || '');
+
+                // 音色音频落盘目录（用于"📂 打开文件夹"功能：内存 blob → 落盘到磁盘）
+                const timbreSaveDir = ref(localStorage.getItem('unitale_timbreSaveDir') || '');
+                const defaultTimbreSaveDir = ref('');
+
+                const saveTimbreSaveDir = () => {
+                    localStorage.setItem('unitale_timbreSaveDir', timbreSaveDir.value);
+                    alert(`音色保存目录已保存：${timbreSaveDir.value || defaultTimbreSaveDir.value || '项目目录/timbres'}`);
+                };
+
                 // 角色库状态
                 const characters = ref([]);
 
@@ -1664,7 +1935,7 @@
                 const isEditingEmotion = ref(false);
                 // 音效库状态
                 const sfxLibrary = ref([]);
-                const sfxForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 });
+                const sfxForm = ref({ id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3, isAmbient: false });
                 const isEditingSfx = ref(false);
 
                 // BGM库状态
@@ -1703,6 +1974,22 @@
                 // 脚本制作状态
                 const rawScript = ref('');
                 const scriptLines = ref([]);
+                // 工单 D：实时统计未命中音效数。source==='unmatched' 或 unmatchedHint 仍存在的算一条
+                const unmatchedSfxCount = computed({
+                    get() {
+                        let n = 0;
+                        scriptLines.value.forEach(line => {
+                            if (line.sfx && Array.isArray(line.sfx)) {
+                                line.sfx.forEach(s => {
+                                    if (s.source === 'unmatched' || s.unmatchedHint) n++;
+                                });
+                            }
+                        });
+                        return n;
+                    },
+                    // 兼容性占位（computed 默认只读，不写）
+                    set() {}
+                });
                 const isAnalyzingScript = ref(false);
                 const rawAnalysisResult = ref('');
                 const analysisAbortController = ref(null);
@@ -1883,19 +2170,24 @@
 - **严禁删改**: **绝对禁止**删除原文中的说话人提示语（如“他低声说”、“笑着问道”）。这些内容必须作为“旁白”单独提取出来。
 - **内容提取**: 提取对话内容和所有非对话的旁白。
 - **角色识别**: 根据小说内容分析说话人。旁白的角色名统一标记为“旁白”。
-- **长度控制**: 文本拆分长度要适中。**避免过碎**（不要把每一句短句都拆成独立一行），也**避免过长**（单行文本建议不超过 50-80 字，过长的旁白请在句号处适当拆分）。
+- **说话人证据优先级**: 优先使用引号附近的“某某说/问/喊/低声道”等说话提示语，其次结合连续对话轮次、动作执行主体、称谓关系与前后文判断；不得仅凭最近出现的人名猜测。
+- **角色规范化**: 同一人物的本名、明确昵称和称谓应统一为一个稳定角色名；Narrator/叙述者统一输出“旁白”。除原文确实以第一人称角色出现且身份无法解析外，不要把“他/她/你/某人”等代词直接作为新角色名。
+- **内心与引述**: 内心独白归属正在思考的角色；角色转述他人话语时，若是当前角色发声则仍归当前角色，不要误归被引述者。
+- **不确定处理**: 无法可靠判断时使用最稳定的已有角色名并结合上下文复核，禁止把动作、情绪或完整句子填入 role_name。
+- **长度控制（硬性要求）**: 每个 dialogue 的 text_content **绝对不得超过 120 个字符（标点计入）**。优先在句号、问号、感叹号、分号、冒号、逗号等自然停顿处拆分；不要把合理短句拆得过碎，也不得截断、遗漏或改写原文。
 - **旁白处理**: 连续的旁白内容应优先合并，除非中间需要插入音效、有明显的时间跳跃，或合并后长度过长。
 
 ## 3. 音效插入 (sfx)
-- 如果情节需要（如“摔门而去”、“雷声大作”），且音效库中有对应素材，请在 JSON 对象中添加 \`sfx\` 字段。
-- **严格限制**: 只能使用【音效库】中列出的名称。如果库为空或没有匹配项，**绝对不要**添加此字段。
-- **禁止混用**: **绝对禁止**在 \`sfx\` 字段中使用【背景音乐库】中的名称。SFX 只能使用【音效库】的内容。
+- **首要原则**: 凡有声可配处，尽量为每句台词添加上「sfx」字段。不要因为"不确定库中是否有精确匹配"就省略——命中库中名称用原名；若库中没有完全同名素材，**不要放弃**，而是用写实、简洁、可被搜索引擎匹配的关键词为音效命名（如"脚步_男女_走廊_远去"、"雨_窗外_夜"），系统会自动对这些描述性名称做二次匹配（含 LLM 兜底重定向 + Freesound 在线检索）。
+- **严格限制**: 音效名称只能来自【音效库】+ 以上描述的**写实关键词**。**绝对禁止**在「sfx」字段中使用【背景音乐库】中的名称。SFX 只能使用【音效库】的内容或写实描述词。
 - **支持多音效**: 一句台词中可以插入多个音效，只要位置合理（如开头关门，中间脚步声）。
-- 格式: \`"sfx": [{"name": "音效名称", "position": 0.5}, {"name": "另一音效", "position": 0.9}]\`
-- \`position\`: 0.0-1.0 之间的浮点数，表示音效在**台词念白时长内**的插入位置（例如 0.0 为开始，1.0 为念白结束）。
-- **重要**: \`position\` 计算**不包含** \`break_duration\`（停顿时间）。即 1.0 代表台词说完的那一刻，而不是停顿结束的那一刻。
-- **间隔音效**: 如果音效发生在台词后的停顿期间，请将其加入该台词的 \`sfx\` 列表，位置设为 1.0。
-- **特别重要** 尽量给每句都配上合适的SFX音效，如果有的话
+- 格式: 「"sfx": [{"name": "音效名称或写实描述词", "position": 0.5}, {"name": "另一音效", "position": 0.9}]」
+- 「position」: 0.0-1.0 之间的浮点数，表示音效在**台词念白时长内**的插入位置（例如 0.0 为开始，1.0 为念白结束）。
+- **重要**: 「position」计算**不包含**「break_duration」（停顿时间）。即 1.0 代表台词说完的那一刻，而不是停顿结束的那一刻。
+- **间隔音效**: 如果音效发生在台词后的停顿期间，请将其加入该台词的「sfx」列表，位置设为 1.0。
+- **持续型环境音（Ambient）**: 如果剧情蕴含持续背景声（如风声、雨声、钟摆声、室内沉闷底噪），请使用【音效库】中标注为「持续/Ambient」的素材，或给出注明 ambient 语义的写实描述（如"风声_持续_窗外"）。这类音效在播放端会自动贯穿整句台词。
+- **静默也是有声音的**: 剧情描写"屋内一片死寂""突然安静下来""心跳声"时，也请添加对应 sfx（如室内静音底噪、心跳声），**不要因"此刻似乎没有明显动作"就跳过**。
+- **特别重要** 尽量给每句都配上合适的SFX音效
 
 ## 4. 背景音乐控制 (BGM Control)
 - **开头BGM**: 请**务必**在脚本的最开始尝试匹配并插入一个适合当前氛围的 BGM。只要【背景音乐库】中有合适的，就**必须**插入。
@@ -1958,14 +2250,20 @@
 [
 \${bgmExampleLine}
   {"type": "dialogue", "role_name": "老李", "text_content": "别接那个电话！", "emotion": "害怕", "intensity": "强烈", "break_duration": 0},
-  {"type": "dialogue", "role_name": "旁白", "text_content": "老李猛地按住了我的手，脸色惨白，", "emotion": "平静", "intensity": "中等", "break_duration": 0},
-  {"type": "dialogue", "role_name": "老李", "text_content": "那是昨晚值班的小张打来的。", "emotion": "害怕", "intensity": "较强", "break_duration": 0.5},
+  {"type": "dialogue", "role_name": "旁白", "text_content": "老李猛地按住了我的手，脸色惨白，", "emotion": "平静", "intensity": "中等", "break_duration": 0, "sfx": [{"name": "衣物摩擦_手臂被按住", "position": 0.2}]},
+  {"type": "dialogue", "role_name": "老李", "text_content": "那是昨晚值班的小张打来的。", "emotion": "害怕", "intensity": "较强", "break_duration": 0.5, "sfx": [{"name": "电话震动_持续", "position": 0.0}]},
   {"type": "dialogue", "role_name": "旁白", "text_content": "我愣住了，看着办公桌上疯狂震动的座机：", "emotion": "平静", "intensity": "中等", "break_duration": 0\${sfxExample}},
-  {"type": "dialogue", "role_name": "我", "text_content": "可是……小张不是今早已经确认死亡了吗？", "emotion": "惊喜", "intensity": "微弱", "break_duration": 0.5},
+  {"type": "dialogue", "role_name": "我", "text_content": "可是……小张不是今早已经确认死亡了吗？", "emotion": "惊喜", "intensity": "微弱", "break_duration": 0.5, "sfx": [{"name": "心跳_单人_紧张", "position": 0.35}]},
   {"type": "dialogue", "role_name": "老李", "text_content": "对，", "emotion": "低落", "intensity": "中等", "break_duration": 0},
   {"type": "dialogue", "role_name": "旁白", "text_content": "老李的声音在发抖，", "emotion": "平静", "intensity": "中等", "break_duration": 0},
-  {"type": "dialogue", "role_name": "老李", "text_content": "所以，别接。如果你接了，他会问你为什么不救他。", "emotion": "害怕", "intensity": "强烈", "break_duration": 0}
+  {"type": "dialogue", "role_name": "老李", "text_content": "所以，别接。如果你接了，他会问你为什么不救他。", "emotion": "害怕", "intensity": "强烈", "break_duration": 0, "sfx": [{"name": "室内低沉底噪_持续", "position": 0.0}, {"name": "电话铃声", "position": 1.0}]}
 ]
+
+**sfx 字段四种典型形态参考**（请模仿这种密集配音风格，但不要把本段说明写进 JSON 输出）：
+1. 动作瞬时音（动词开头，position 取 0.0-0.3）："sfx": [{"name": "脚步_走廊_远去", "position": 0.1}]
+2. 环境持续音（标注 [持续/Ambient] 语义，position 取 0.0，贯穿整句）："sfx": [{"name": "雨_窗外 [持续/Ambient]", "position": 0.0}]
+3. 间隔音效（在 break_duration 里触发，position 用 1.0）："sfx": [{"name": "门_关上_轻", "position": 1.0}]
+4. 静默段标配（剧情安静时用心跳/呼吸声填补，position 取 0.3-0.5）："sfx": [{"name": "心跳_单人_紧张", "position": 0.3}]
 
 # 输入内容
 
@@ -2218,9 +2516,11 @@
 
                 // --- 预览播放逻辑 ---
                 const previewPlayingFile = ref(null);
+                const previewError = ref('');
                 let previewSource = null;
 
                 const playPreview = async (item) => {
+                    previewError.value = '';
                     if (audioContext.state === 'suspended') await audioContext.resume();
 
                     if (previewSource) {
@@ -2254,9 +2554,20 @@
                         return;
                     }
 
-                    if (!filename) return;
+                    if (!filename) {
+                        previewError.value = `音效“${item?.name || '未命名'}”尚无可播放素材`;
+                        alert(previewError.value);
+                        return;
+                    }
 
-                    const buffer = await loadAudioBuffer(filename);
+                    const { resolveSfxPlaybackUrl } = await unitaleLogicPromise;
+                    const playbackUrl = resolveSfxPlaybackUrl(item);
+                    if (!playbackUrl) {
+                        previewError.value = `音效“${item?.name || '未命名'}”尚无可播放素材`;
+                        alert(previewError.value);
+                        return;
+                    }
+                    const buffer = await loadAudioBuffer(playbackUrl);
                     if (buffer) {
                         previewSource = audioContext.createBufferSource();
                         previewSource.buffer = buffer;
@@ -2304,6 +2615,9 @@
                             }
                         };
                         playbackAnimationFrame = requestAnimationFrame(updateProgress);
+                    } else {
+                        previewError.value = `无法加载音效“${item?.name || filename}”，请检查文件路径或后端服务`;
+                        alert(previewError.value);
                     }
                 };
 
@@ -2430,6 +2744,17 @@
 
                 // 读取持久化配置
                 onMounted(async () => {
+
+                     // 拉取后端默认音色保存目录，用于初始化输入框 placeholder
+                     try {
+                         const resDir = await fetch('/v1/timbre/default_save_dir');
+                         if (resDir.ok) {
+                             const dirData = await resDir.json();
+                             if (dirData.code === 200 && dirData.default_dir) {
+                                 defaultTimbreSaveDir.value = dirData.default_dir;
+                             }
+                         }
+                     } catch (e) { console.warn('拉取默认音色目录失败:', e); }
 
                      // 仅保留 LLM 和 TTS 的配置持久化 (API Key 等)
                      const savedList = localStorage.getItem('storyforge_configs');
@@ -2715,6 +3040,378 @@
                 const resetTtsForm = () => {
                     ttsForm.value = { id: '', name: '', baseUrl: '' };
                     isEditingTts.value = false;
+                };
+
+                // --- LLM 兜底匹配配置（Phase 2）---
+                const saveFallbackConfigsToLocal = () => {
+                    localStorage.setItem('unitale_fallbackConfigs', JSON.stringify(fallbackConfigs.value));
+                };
+                const saveFallbackConfig = () => {
+                    if (!fallbackForm.value.name || !fallbackForm.value.baseUrl || !fallbackForm.value.model) {
+                        return alert('请填写名称、模型名和 Base URL');
+                    }
+                    fallbackForm.value.baseUrl = fallbackForm.value.baseUrl.trim().replace(/\/+$/, '');
+                    if (isEditingFallback.value) {
+                        const index = fallbackConfigs.value.findIndex(c => c.id === fallbackForm.value.id);
+                        if (index !== -1) fallbackConfigs.value[index] = { ...fallbackForm.value };
+                    } else {
+                        fallbackConfigs.value.push({ ...fallbackForm.value, id: Date.now().toString() });
+                    }
+                    saveFallbackConfigsToLocal();
+                    resetFallbackForm();
+                };
+                const editFallbackConfig = (conf) => {
+                    fallbackForm.value = { ...conf };
+                    isEditingFallback.value = true;
+                };
+                const deleteFallbackConfig = (id) => {
+                    if (!confirm('确定删除此兜底配置吗？')) return;
+                    fallbackConfigs.value = fallbackConfigs.value.filter(c => c.id !== id);
+                    if (currentFallbackConfigId.value === id) currentFallbackConfigId.value = '';
+                    saveFallbackConfigsToLocal();
+                };
+                const resetFallbackForm = () => {
+                    fallbackForm.value = { id: '', name: '', model: '', baseUrl: '', key: '' };
+                    isEditingFallback.value = false;
+                };
+
+                // --- Freesound 在线检索配置（Phase 2）---
+                const saveFreesoundConfig = async () => {
+                    localStorage.setItem('unitale_freesoundToken', freesoundToken.value);
+                    localStorage.setItem('unitale_freesoundEnabled', JSON.stringify(freesoundEnabled.value));
+                    localStorage.setItem('unitale_freesoundAutoImport', JSON.stringify(freesoundAutoImport.value));
+                    localStorage.setItem('unitale_sfxSaveDir', sfxSaveDir.value);
+                    // 填了自定义下载目录时，预先登记为受信根，否则 local_file 试听会被后端白名单拒绝
+                    const customDir = sfxSaveDir.value.trim();
+                    if (customDir) {
+                        try {
+                            const formData = new FormData();
+                            formData.append('root_path', customDir);
+                            await fetch('/v1/sfx/allow_root', { method: 'POST', body: formData });
+                        } catch (e) {
+                            console.warn('登记自定义音效目录失败（不影响保存，但试听该目录文件可能被拒）:', e);
+                        }
+                    }
+                    alert('Freesound 配置已保存');
+                };
+
+                // --- Phase 3/4：本地音效文件夹扫描方法 ---
+                const setSfxScanRoot = async () => {
+                    if (!sfxScanRootPath.value.trim()) return alert('请输入扫描根路径');
+                    try {
+                        const formData = new FormData();
+                        formData.append('root_path', sfxScanRootPath.value.trim());
+                        const res = await fetch(`${window.location.origin.includes(':8080') ? '' : ''}/v1/sfx/scan_root`, {
+                            method: 'POST', body: formData
+                        });
+                        const data = await res.json();
+                        if (data.code === 200) {
+                            sfxScanRootStatus.value = '已保存：' + data.root_path;
+                            sfxScanRootExists.value = true;
+                        } else {
+                            sfxScanRootStatus.value = '保存失败：' + (data.detail || '未知错误');
+                            sfxScanRootExists.value = false;
+                        }
+                    } catch (e) {
+                        sfxScanRootStatus.value = '请求失败（后端未启动？）：' + e.message;
+                        sfxScanRootExists.value = false;
+                    }
+                };
+
+                const getSfxScanRoot = async () => {
+                    try {
+                        const res = await fetch('/v1/sfx/scan_root');
+                        const data = await res.json();
+                        if (data.code === 200) {
+                            sfxScanRootPath.value = data.root_path || '';
+                            sfxScanRootExists.value = !!data.exists;
+                            sfxScanRootStatus.value = data.exists ? '路径有效：' + data.root_path : (data.root_path ? '路径已记录但实际不存在' : '未设置');
+                        }
+                    } catch (e) {
+                        sfxScanRootStatus.value = '请求失败（后端未启动？）：' + e.message;
+                    }
+                };
+
+                const scanLocalSfx = async () => {
+                    if (!sfxScanRootPath.value.trim()) return alert('请先设置并保存扫描根路径');
+                    isScanningLocal.value = true;
+                    try {
+                        const formData = new FormData();
+                        formData.append('root_path', sfxScanRootPath.value.trim());
+                        const res = await fetch('/v1/sfx/scan_local', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (data.code === 200) {
+                            scannedSfxItems.value = data.items || [];
+                            alert(`扫描完成，共发现 ${data.total} 个音频文件`);
+                        } else {
+                            alert('扫描失败：' + (data.detail || '未知错误'));
+                        }
+                    } catch (e) {
+                        alert('扫描请求失败（后端未启动？）：' + e.message);
+                    } finally {
+                        isScanningLocal.value = false;
+                    }
+                };
+
+                const importSingleScannedSfx = (item) => {
+                    // 把扫描到的本地音效直接注册到前端 sfxLibrary
+                    const newId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+                    sfxLibrary.value.push({
+                        id: newId,
+                        name: item.name,
+                        description: `本地扫描：${(item.tags || []).join(' / ') || '根目录'}`,
+                        filename: item.path, // 用相对路径作为 filename
+                        source: 'local_scan',
+                        scanRoot: sfxScanRootPath.value.trim(),
+                        trimStart: 0,
+                        trimEnd: 1,
+                        volume: 0.3,
+                        enabled: true
+                    });
+                    saveSfxToLocal();
+                    alert(`已入库：${item.name}`);
+                };
+
+                const importScannedSfx = () => {
+                    if (scannedSfxItems.value.length === 0) return;
+                    let added = 0;
+                    scannedSfxItems.value.forEach(item => {
+                        // 去重：已存在同名的不重复添加
+                        const exists = sfxLibrary.value.some(s => s.filename === item.path);
+                        if (exists) return;
+                        const newId = Date.now().toString() + Math.random().toString(36).substr(2, 5) + added;
+                        sfxLibrary.value.push({
+                            id: newId,
+                            name: item.name,
+                            description: `本地扫描：${(item.tags || []).join(' / ') || '根目录'}`,
+                            filename: item.path,
+                            source: 'local_scan',
+                            scanRoot: sfxScanRootPath.value.trim(),
+                            trimStart: 0,
+                            trimEnd: 1,
+                            volume: 0.3,
+                            enabled: true
+                        });
+                        added++;
+                    });
+                    saveSfxToLocal();
+                    alert(`已完成批量入库，新增 ${added} 个，跳过 ${scannedSfxItems.value.length - added} 个重复`);
+                };
+
+                const clearScannedSfx = () => {
+                    if (!confirm('清空扫描结果？已入库的音效不受影响。')) return;
+                    scannedSfxItems.value = [];
+                };
+
+                // LLM 兜底匹配：调用 OpenAI 兼容端点进行音效智能重定向（Phase 9 增强版：正则清洗 + 三层降级匹配 + NONE 约定）
+                const llmFallbackMatch = async (targetName, libraryNames) => {
+                    if (!fallbackConfigs.value.length || !libraryNames.length) return '';
+                    let cfg = fallbackConfigs.value[0];
+                    if (currentFallbackConfigId.value) {
+                        const selected = fallbackConfigs.value.find(c => c.id === currentFallbackConfigId.value);
+                        if (selected) cfg = selected;
+                    }
+                    try {
+                        let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
+                        if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                        let url = baseUrl + '/v1/chat/completions';
+                        const body = {
+                            model: cfg.model,
+                            messages: [{
+                                role: 'user',
+                                content: `现有音效库列表：[${libraryNames.join(', ')}]。\n用户请求音效：'${targetName}'。\n请判断现有库中是否存在功能上最接近的一个音效。\n规则：只返回音效名称本身，不要加任何解释、引号、标点。\n若完全无关则在第一行返回字符串 "NONE" 一词。`
+                            }],
+                            stream: false,
+                            temperature: 0.2
+                        };
+                        const res = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+                            body: JSON.stringify(body)
+                        });
+                        if (!res.ok) return '';
+                        const data = await res.json();
+                        let content = (data.choices[0]?.message?.content || '').trim();
+
+                        if (/^(none|无|null|nil)$/i.test(content)) return '';
+
+                        content = content.split('\n')[0].trim();
+                        content = content.replace(/^["'"'"'「『]|[："'"'"'」』].*$/g, '').trim();
+
+                        // 层 1：精确匹配（忽略大小写）
+                        let hit = libraryNames.find(n => n.toLowerCase() === content.toLowerCase());
+                        if (hit) return hit;
+
+                        // 层 2：包含匹配
+                        hit = libraryNames.find(n =>
+                            n.toLowerCase().includes(content.toLowerCase()) ||
+                            content.toLowerCase().includes(n.toLowerCase()));
+                        if (hit) return hit;
+
+                        // 层 3：最长公共子串比率（>= 80%）
+                        const similar = libraryNames.map(n => {
+                            const lcs = (a, b) => {
+                                const [m, n2] = [a.length, b.length];
+                                const dp = Array(m + 1).fill(0).map(() => Array(n2 + 1).fill(0));
+                                for (let i = 0; i < m; i++) for (let j = 0; j < n2; j++)
+                                    dp[i + 1][j + 1] = a[i] === b[j] ? dp[i][j] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                                return dp[m][n2];
+                            };
+                            const matchLen = lcs(n.toLowerCase(), content.toLowerCase());
+                            return { name: n, ratio: matchLen / Math.max(n.length, content.length) };
+                        }).sort((a, b) => b.ratio - a.ratio)[0];
+
+                        if (similar && similar.ratio >= 0.8) return similar.name;
+
+                        return '';
+                    } catch (e) {
+                        console.warn('LLM 兜底匹配失败:', e);
+                        return '';
+                    }
+                };
+
+                // Freesound 在线检索与下载（Phase 9 重构：改由后端下载到本地 save_dir）
+                const fetchFreesoundSfx = async (keyword) => {
+                    if (!freesoundEnabled.value || !freesoundToken.value) return null;
+                    try {
+                        const formData = new FormData();
+                        formData.append('keyword', keyword);
+                        formData.append('token', freesoundToken.value);
+                        if (sfxSaveDir.value.trim()) {
+                            formData.append('save_dir', sfxSaveDir.value.trim());
+                        }
+                        const res = await fetch('/v1/sfx/fetch_freesound', { method: 'POST', body: formData });
+                        if (!res.ok) return null;
+                        const data = await res.json();
+                        if (data.code === 200 && data.filename) {
+                            return {
+                                name: data.name,
+                                filename: data.filename, // 真实本地文件名（在 save_dir 下）
+                                scanRoot: data.save_dir || '',
+                                isAmbient: data.isAmbient ?? false
+                            };
+                        }
+                        return null;
+                    } catch (e) {
+                        console.warn('Freesound 后端下载失败:', e);
+                        return null;
+                    }
+                };
+
+                // resolveUnmatchedSfx：纯函数式（不弹窗）尝试 LLM 兜底 → Freesound，返回 {name, source, ...} 或 null
+                const resolveUnmatchedSfx = async (unmatchedName) => {
+                    // 优先尝试 LLM 兜底
+                    const libraryNames = sfxLibrary.value.map(s => s.name);
+                    const llmHit = await llmFallbackMatch(unmatchedName, libraryNames);
+                    if (llmHit) return { name: llmHit, source: 'llm' };
+                    // 其次尝试 Freesound 在线检索
+                    const fsHit = await fetchFreesoundSfx(unmatchedName);
+                    if (fsHit) return { name: fsHit.name, source: 'freesound', filename: fsHit.filename, scanRoot: fsHit.scanRoot || '', isAmbient: fsHit.isAmbient ?? false };
+                    return null;
+                };
+
+                // 把来自 Freesound 的 result.filename 自动入库（若启用 freesoundAutoImport）
+                const autoImportFreesoundHit = (result, unmatchedName) => {
+                    if (result.source === 'freesound' && result.filename && freesoundAutoImport.value) {
+                        const existIdx = sfxLibrary.value.findIndex(s => s.name === result.name);
+                        if (existIdx === -1) {
+                            sfxLibrary.value.push({
+                                id: Date.now().toString() + '_fs',
+                                name: result.name,
+                                description: `Freesound 在线检索下载: ${unmatchedName}`,
+                                filename: result.filename,
+                                trimStart: 0,
+                                trimEnd: 1,
+                                volume: 0.3,
+                                isAmbient: result.isAmbient ?? false,
+                                enabled: true,
+                                source: 'freesound_file',
+                                scanRoot: result.scanRoot || sfxSaveDir.value || ''
+                            });
+                        }
+                    }
+                };
+
+                // 把 scriptLines 中所有 unmatchedHint===unmatched 的 sfx 项写回为命中状态
+                const writeBackResolvedSfx = (unmatchedName, result) => {
+                    scriptLines.value.forEach(line => {
+                        if (line.sfx && Array.isArray(line.sfx)) {
+                            line.sfx.forEach(s => {
+                                if (s.unmatchedHint === unmatchedName) {
+                                    s.name = result.name;
+                                    s.source = result.source;
+                                    s.unmatchedHint = null;
+                                    s.lastQuery = unmatchedName;
+                                    // 始终保留可播放文件信息，即使关闭自动入库也能试听
+                                    if (result.filename) {
+                                        s.filename = result.filename;
+                                        s.scanRoot = result.scanRoot || '';
+                                        s.source = result.source || 'freesound_file';
+                                    }
+                                }
+                            });
+                        }
+                    });
+                };
+
+                // runUnmatchedSfxWorkflow：复用主流程，给"分析后自动跑"与"工单 D 的重新匹配按钮"共享
+                // 入参：names 字符串数组
+                // 出参：{ resolved: string[], stillUnmatched: string[] }
+                const runUnmatchedSfxWorkflow = async (names) => {
+                    const resolved = [];
+                    const stillUnmatched = [];
+                    for (const unmatched of names) {
+                        const result = await resolveUnmatchedSfx(unmatched);
+                        if (result && result.name) {
+                            autoImportFreesoundHit(result, unmatched);
+                            writeBackResolvedSfx(unmatched, result);
+                            resolved.push(unmatched);
+                        } else {
+                            stillUnmatched.push(unmatched);
+                        }
+                    }
+                    // 仍未命中的，二次 confirm（给用户最后手动处理选项）
+                    if (stillUnmatched.length > 0) {
+                        const summary = stillUnmatched.map(n => `• ${n}`).join('\n');
+                        const tipMsg = `以下 ${stillUnmatched.length} 个音效在线检索仍未命中：\n${summary}\n\n` +
+                            `可选操作：\n` +
+                            `1) 点击"确定" — 保留原名称，可稍后在"音效与滤波器"页用"🔁 重新匹配"按钮再试\n` +
+                            `2) 点击"取消" — 同样保留原名称，并打开 Freesound 网站手动搜索\n` +
+                            `（提示：LLM 兜底需在"模型配置"页配置；Freesound 需启用在线检索开关）`;
+                        const userChoice = window.confirm(tipMsg);
+                        if (!userChoice) {
+                            // 用户点取消 → 打开 Freesound 搜索页（关键字 = 第一个未命中名）
+                            const q = encodeURIComponent(stillUnmatched[0] || '');
+                            window.open(`https://freesound.org/search/?q=${q}`, '_blank');
+                        }
+                    }
+                    return { resolved, stillUnmatched };
+                };
+
+                // Phase 6 兼容老调用名（若其他地方还用 confirmSfxReplace，转发到 resolveUnmatchedSfx）
+                const confirmSfxReplace = async (unmatchedName) => resolveUnmatchedSfx(unmatchedName);
+
+                // 工单 D：手动重新匹配按钮的入口
+                const retryAllUnmatchedSfx = async () => {
+                    const unmatchedNames = new Set();
+                    scriptLines.value.forEach(line => {
+                        if (line.sfx && Array.isArray(line.sfx)) {
+                            line.sfx.forEach(s => {
+                                if (s.source === 'unmatched' || s.unmatchedHint) {
+                                    unmatchedNames.add(s.unmatchedHint || s.name);
+                                }
+                            });
+                        }
+                    });
+                    if (unmatchedNames.size === 0) {
+                        alert('当前没有未命中的音效需要重新匹配');
+                        return;
+                    }
+                    const nameList = Array.from(unmatchedNames);
+                    const summary = nameList.map(n => `• ${n}`).join('\n');
+                    const tipMsg = `以下 ${nameList.length} 个音效未命中，将自动执行 LLM 兜底 + Freesound 在线检索：\n${summary}\n\n点击"确定"开始；点击"取消"放弃本次操作。`;
+                    if (!window.confirm(tipMsg)) return;
+                    await runUnmatchedSfxWorkflow(nameList);
                 };
 
                 // --- 角色库管理逻辑 (左侧栏) ---
@@ -3057,6 +3754,79 @@
                     downloadAudioBlob(blob, filenameStr);
                 };
 
+                // 打开音色音频文件在操作系统中的保存位置
+                // 优先级：本地扫描真实路径 > Freesound 下载真实路径 > blob/IndexedDB（落临时文件再定位）
+                // 打开音色音频文件在操作系统中的保存位置
+                // 来源分流（spec 第四节）：
+                //   A. 本地扫描/Freesound：refPath/scanRoot/physicalPath 已是真实磁盘路径 → 直接 open_folder?select=1
+                //   B. 用户上传/ TTS 生成：仅在 IndexedDB / blob → 落盘到 timbreSaveDir → 回写 refPath → open_folder?select=1
+                const openTimbreFolder = async (timbre) => {
+                    const refPath = timbre?.refPath;
+                    if (!refPath) {
+                        alert('该音色没有关联的音频文件路径。');
+                        return;
+                    }
+
+                    // 1) 已知真实磁盘路径的候选（A 路径）
+                    const candidatePaths = [];
+                    if (refPath && /^[A-Za-z]:[\\/]/.test(refPath)) candidatePaths.push(refPath);
+                    if (timbre.physicalPath) candidatePaths.push(timbre.physicalPath);
+                    if (timbre.scanRoot && refPath) {
+                        const rel = refPath.replace(/^[\\/]+/, '');
+                        candidatePaths.push(`${timbre.scanRoot}/${rel}`.replace(/\//g, '\\'));
+                    }
+
+                    for (const p of candidatePaths) {
+                        try {
+                            const res = await fetch(`/v1/system/open_folder?path=${encodeURIComponent(p)}&select=true`);
+                            if (res.ok) {
+                                const data = await res.json();
+                                if (data.code === 200) return; // 已打开并选中
+                            }
+                        } catch (e) { /* 继续下一个候选 */ }
+                    }
+
+                    // 2) blob/IndexedDB 来源（B 路径）：先落盘到 timbreSaveDir，再打开
+                    let blob = localFileMap.value.get(refPath) || await loadAssetFromDB(refPath);
+                    if (!blob) {
+                        alert('未找到该音色的音频源文件，无法定位保存位置。');
+                        return;
+                    }
+                    try {
+                        const saveDir = (timbreSaveDir.value || '').trim() || defaultTimbreSaveDir.value || '';
+                        // 判断是否 TTS 生成：名字以 _AI 结尾 或 id 是纯数字（Date.now()）
+                        const isTts = (timbre.name || '').endsWith('_AI') || /^\d+$/.test(timbre.id || '');
+                        const fd = new FormData();
+                        fd.append('file', blob, refPath.split(/[\\/]/).pop() || 'timbre.wav');
+                        fd.append('timbre_name', timbre.name || 'timbre');
+                        fd.append('description', timbre.description || '');
+                        fd.append('is_tts', isTts ? 'true' : 'false');
+                        if (saveDir) fd.append('save_dir', saveDir);
+                        fd.append('original_filename', refPath.split(/[\\/]/).pop() || '');
+
+                        const res = await fetch('/v1/timbre/save_to_disk', { method: 'POST', body: fd });
+                        if (!res.ok) {
+                            const errBody = await res.json().catch(() => ({}));
+                            throw new Error(errBody.detail || `HTTP ${res.status}`);
+                        }
+                        const data = await res.json();
+                        if (data.code !== 200 || !data.path) throw new Error(data.detail || '落盘失败');
+
+                        // 落盘成功后回写 refPath 为绝对路径，下次直接走 A 路径
+                        timbre.refPath = data.path;
+                        if (!timbre.originalFilename) timbre.originalFilename = data.filename;
+                        triggerAutoSave && triggerAutoSave();
+
+                        // 调 open_folder 打开目录并选中文件
+                        const openRes = await fetch(`/v1/system/open_folder?path=${encodeURIComponent(data.path)}&select=true`);
+                        if (!openRes.ok) throw new Error(`打开失败 HTTP ${openRes.status}`);
+                    } catch (e) {
+                        console.error('打开音色文件夹失败:', e);
+                        alert(`打开保存位置失败: ${e.message}`);
+                    }
+                };
+
+
                 const downloadSfxOrBgm = async (item, typeStr) => {
                     const filename = item.filename;
                     if (!filename) return;
@@ -3126,7 +3896,7 @@
                 };
 
                 const resetSfxForm = () => {
-                    sfxForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3 };
+                    sfxForm.value = { id: '', name: '', description: '', filename: '', trimStart: 0, trimEnd: 1, volume: 0.3, isAmbient: false };
                     isEditingSfx.value = false;
                 };
 
@@ -3283,6 +4053,12 @@
                     return Array.from(roles);
                 });
 
+                const confirmLineRole = (line) => {
+                    line.roleNeedsReview = false;
+                    line.roleReviewReason = '';
+                    triggerAutoSave();
+                };
+
                 // --- 拖拽与排序逻辑 ---
                 const draggingIndex = ref(-1);
                 const moveLineUp = (index) => {
@@ -3345,6 +4121,12 @@
 
                     if (!currentTtsConfig.value) {
                         alert('请先在 TTS 配置中心选择一个 TTS 服务');
+                        return;
+                    }
+
+                    const textLength = Array.from(line.text || '').length;
+                    if (textLength > 120) {
+                        alert(`当前台词有 ${textLength} 个字符，超过 120 字符上限。请先让系统合理拆分后再生成语音。`);
                         return;
                     }
 
@@ -3465,6 +4247,13 @@
                                     // Pre-flight check on lines that will be processed
 
                                     const linesToProcess = linesToCheck.filter(l => l.type === 'dialogue' && !l.audioUrl);
+
+                                    const overLimitLine = linesToProcess.find(l => Array.from(l.text || '').length > 120);
+                                    if (overLimitLine) {
+                                        const lineIndex = scriptLines.value.findIndex(l => l.id === overLimitLine.id);
+                                        alert(`一键生成已终止。\n\n原因：第 ${lineIndex + 1} 行台词超过 120 个字符，请先点击文本框并移出焦点以自动拆分。`);
+                                        return;
+                                    }
 
                                     for (const line of linesToProcess) {
 
@@ -3665,7 +4454,8 @@
                                             item: sfxItem, 
                                             libVolume: sfxLibItem.volume ?? 1.0,
                                             trimStart: sfxLibItem.trimStart ?? 0,
-                                            trimEnd: sfxLibItem.trimEnd ?? 1
+                                            trimEnd: sfxLibItem.trimEnd ?? 1,
+                                            isAmbient: sfxLibItem.isAmbient ?? false
                                         };
                                     }
                                     return null;
@@ -3686,28 +4476,63 @@
 
                             const now = audioContext.currentTime + 0.05; // Slight delay for sync
 
-                            // 6. Schedule SFX
-                            sfxBuffers.forEach(({ buffer, item, libVolume, trimStart: sfxTrimStart, trimEnd: sfxTrimEnd }) => {
-                                const pos = parseFloat(item.position) || 0;
-                                const clampedPos = Math.max(0, Math.min(1, pos));
-                                const sfxTime = now + (processedDuration * clampedPos);
-                                if (Number.isFinite(sfxTime)) {
+                            // 6. Schedule SFX (瞬时音效 + 环境持续音 Ambient)
+                            sfxBuffers.forEach(({ buffer, item, libVolume, trimStart: sfxTrimStart, trimEnd: sfxTrimEnd, isAmbient }) => {
+                                const finalSfxVol = (line.sfxVolume ?? 0.5) * (libVolume ?? 1.0);
+                                const sGain = audioContext.createGain();
+                                sGain.connect(getAudioOutputNode());
+
+                                if (isAmbient) {
+                                    // 环境持续音（Ambient）：淡入铺底整个台词时长，淡出
                                     const sSrc = audioContext.createBufferSource();
                                     sSrc.buffer = buffer;
-                                    const sGain = audioContext.createGain();
-                                    const finalSfxVol = (line.sfxVolume ?? 0.5) * (libVolume ?? 1.0);
-                                    sGain.gain.setValueAtTime(finalSfxVol, now);
-                                    sSrc.connect(sGain).connect(getAudioOutputNode());
-
-                                    const sOffset = buffer.duration * sfxTrimStart;
-                                    const sDuration = buffer.duration * (sfxTrimEnd - sfxTrimStart);
-                                    sSrc.start(sfxTime, sOffset, sDuration);
-
+                                    sSrc.connect(sGain);
                                     sfxSources.push(sSrc);
+
+                                    const fadeInDur = 0.5; // 0.5 秒淡入
+                                    const fadeOutDur = 0.5; // 0.5 秒淡出
+                                    const ambientStart = now;
+                                    const ambientEnd = now + Math.max(0.1, processedDuration + fadeOutDur);
+
+                                    // 淡入
+                                    sGain.gain.setValueAtTime(0, ambientStart);
+                                    sGain.gain.linearRampToValueAtTime(finalSfxVol * 0.7, ambientStart + fadeInDur); // 持续音音量略低，避免压制对话
+                                    // 持续铺底
+                                    sGain.gain.setValueAtTime(finalSfxVol * 0.7, ambientStart + fadeInDur);
+                                    // 淡出（在台词结束后 0.5 秒完全淡出）
+                                    sGain.gain.setValueAtTime(finalSfxVol * 0.7, ambientEnd - fadeOutDur);
+                                    sGain.gain.linearRampToValueAtTime(0, ambientEnd);
+
+                                    // 持续播放整个台词时长（加淡出缓冲），从缓冲开始位置播放
+                                    const sOffset = buffer.duration * (sfxTrimStart ?? 0);
+                                    const sDuration = Math.max(buffer.duration * 0.5, processedDuration + fadeOutDur); // 至少持续足够长
+                                    sSrc.start(ambientStart, sOffset, sDuration);
+
                                     sSrc.onended = () => {
                                         const idx = sfxSources.indexOf(sSrc);
                                         if (idx > -1) sfxSources.splice(idx, 1);
                                     };
+                                } else {
+                                    // 瞬时音效：根据 item.position 在指定时间点触发
+                                    const pos = parseFloat(item.position) || 0;
+                                    const clampedPos = Math.max(0, Math.min(1, pos));
+                                    const sfxTime = now + (processedDuration * clampedPos);
+                                    if (Number.isFinite(sfxTime)) {
+                                        const sSrc = audioContext.createBufferSource();
+                                        sSrc.buffer = buffer;
+                                        sSrc.connect(sGain);
+                                        sGain.gain.setValueAtTime(finalSfxVol, sfxTime);
+
+                                        const sOffset = buffer.duration * (sfxTrimStart ?? 0);
+                                        const sDuration = buffer.duration * ((sfxTrimEnd ?? 1) - (sfxTrimStart ?? 0));
+                                        sSrc.start(sfxTime, sOffset, sDuration);
+
+                                        sfxSources.push(sSrc);
+                                        sSrc.onended = () => {
+                                            const idx = sfxSources.indexOf(sSrc);
+                                            if (idx > -1) sfxSources.splice(idx, 1);
+                                        };
+                                    }
                                 }
                             });
 
@@ -4345,7 +5170,7 @@
                                 const active = scriptList.value.find(s => s.id === currentScriptId.value);
                                 if (active) {
                                     rawScript.value = active.data.rawScript;
-                                    scriptLines.value = active.data.scriptLines;
+                                    scriptLines.value = await normalizeDialogueLines(active.data.scriptLines || []);
                                     rawAnalysisResult.value = active.data.rawAnalysisResult;
                                     characters.value = active.data.characters || [];
                                     characters.value.forEach(c => { if (c.volume === undefined) c.volume = 1.0; });
@@ -4443,7 +5268,7 @@
                                     }
 
                                     activeScriptData.scriptLines = restoredLines;
-                                    scriptLines.value = restoredLines; // Sync to view
+                                    scriptLines.value = await normalizeDialogueLines(restoredLines); // Sync to view
 
                                     exportStatus.value = '保存中...';
                                     if (assetsToSave.length > 0) {
@@ -4627,46 +5452,184 @@
                             lastNode.connect(dGain).connect(offlineCtx.destination);
                             dSrc.start(evt.time, 0, Math.min(evt.buffer.duration, evt.duration));
 
-                            // 调度音效
+                            // 调度音效（瞬时 + 环境持续音 Ambient）
                             if (evt.line.sfx) {
                                 evt.line.sfx.forEach(s => {
                                     const sBuffer = assets.sfx[s.name];
+                                    const libItem = sfxLibrary.value.find(l => l.name === s.name);
+                                    const isAmbient = libItem?.isAmbient ?? false;
                                     if (sBuffer) {
-                                        const pos = parseFloat(s.position) || 0;
-                                        const clampedPos = Math.max(0, Math.min(1, pos));
-                                        const sfxTime = evt.time + (evt.duration * clampedPos);
-                                        if (Number.isFinite(sfxTime)) {
-                                            const sSrc = offlineCtx.createBufferSource();
-                                            sSrc.buffer = sBuffer;
+                                        if (isAmbient) {
+                                            // 环境持续音：淡入铺底整个台词时长，淡出
                                             const sGain = offlineCtx.createGain();
-                                            const libItem = sfxLibrary.value.find(l => l.name === s.name);
                                             const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
                                             const scriptVol = evt.line.sfxVolume ?? 0.5;
-                                            sGain.gain.value = scriptVol * libVol;
+                                            const finalAmbientVol = scriptVol * libVol * 0.7; // 持续音略低
+                                            const fadeInDur = 0.5;
+                                            const fadeOutDur = 0.5;
+                                            const ambientStart = evt.time;
+                                            const ambientEnd = evt.time + evt.duration + fadeOutDur;
 
+                                            sGain.gain.setValueAtTime(0, ambientStart);
+                                            sGain.gain.linearRampToValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
+                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
+                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientEnd - fadeOutDur);
+                                            sGain.gain.linearRampToValueAtTime(0, ambientEnd);
+
+                                            const sSrc = offlineCtx.createBufferSource();
+                                            sSrc.buffer = sBuffer;
                                             const sTrimStart = libItem?.trimStart ?? 0;
-                                            const sTrimEnd = libItem?.trimEnd ?? 1;
                                             const sOffset = sBuffer.duration * sTrimStart;
-                                            const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
-
+                                            // 持续播放足够长（台词时长 + 淡出缓冲）
+                                            const sDuration = Math.max(sBuffer.duration * 0.5, evt.duration + fadeOutDur);
                                             sSrc.connect(sGain).connect(offlineCtx.destination);
-                                            sSrc.start(sfxTime, sOffset, sDuration);
+                                            sSrc.start(ambientStart, sOffset, sDuration);
+                                        } else {
+                                            // 瞬时音效：根据 item.position 在指定时间点触发
+                                            const pos = parseFloat(s.position) || 0;
+                                            const clampedPos = Math.max(0, Math.min(1, pos));
+                                            const sfxTime = evt.time + (evt.duration * clampedPos);
+                                            if (Number.isFinite(sfxTime)) {
+                                                const sSrc = offlineCtx.createBufferSource();
+                                                sSrc.buffer = sBuffer;
+                                                const sGain = offlineCtx.createGain();
+                                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
+                                                const scriptVol = evt.line.sfxVolume ?? 0.5;
+                                                sGain.gain.value = scriptVol * libVol;
+
+                                                const sTrimStart = libItem?.trimStart ?? 0;
+                                                const sTrimEnd = libItem?.trimEnd ?? 1;
+                                                const sOffset = sBuffer.duration * sTrimStart;
+                                                const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
+
+                                                sSrc.connect(sGain).connect(offlineCtx.destination);
+                                                sSrc.start(sfxTime, sOffset, sDuration);
+                                            }
                                         }
                                     }
                                 });
                             }
                         });
 
-                        const renderedBuffer = await offlineCtx.startRendering();
-                        const wavBlob = bufferToWave(renderedBuffer, renderedBuffer.length);
-                        const url = URL.createObjectURL(wavBlob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `storyforge_export_${Date.now()}.wav`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
+                        // --- 升级：分轨导出（语音轨 dialogue_track.wav + 音效轨 sfx_track.wav + 时间线元数据 JSON） ---
+                        exportStatus.value = '正在渲染纯语音轨 (Dialogue Stem)...';
+                        await new Promise(r => requestAnimationFrame(r));
+
+                        // 1. 渲染纯语音轨
+                        const offlineCtxDialogue = new OfflineAudioContext(1, sampleRate * totalDuration, sampleRate);
+                        for (const line of dialogueLines) {
+                            const buffer = assets.processedDialogues[line.id];
+                            const timing = assets.dialogueTimings[line.id];
+                            if (!buffer || !timing) continue;
+                            const src = offlineCtxDialogue.createBufferSource();
+                            src.buffer = buffer;
+                            const gain = offlineCtxDialogue.createGain();
+                            gain.gain.value = line.dialogueVolume ?? 1.0;
+                            src.connect(gain).connect(offlineCtxDialogue.destination);
+                            src.start(timing.startTime);
+                        }
+                        const renderedDialogueBuf = await offlineCtxDialogue.startRendering();
+                        const dialogueWavBlob = bufferToWave(renderedDialogueBuf, renderedDialogueBuf.length);
+
+                        // 2. 渲染纯音效轨（瞬时音效 + Ambient 持续音）
+                        exportStatus.value = '正在渲染纯音效轨 (SFX & Ambient Stem)...';
+                        await new Promise(r => requestAnimationFrame(r));
+
+                        const offlineCtxSfx = new OfflineAudioContext(1, sampleRate * totalDuration, sampleRate);
+                        events.forEach(evt => {
+                            if (evt.type === 'dialogue' && evt.sfx && evt.sfx.length > 0) {
+                                evt.sfx.forEach(sfxItem => {
+                                    const sBuffer = assets.sfx[sfxItem.name];
+                                    if (sBuffer) {
+                                        const libItem = sfxLibrary.value.find(s => s.name === sfxItem.name);
+                                        const isAmbient = libItem?.isAmbient ?? false;
+                                        const sfxTime = evt.startTime + (sfxItem.position * evt.duration);
+
+                                        if (isAmbient) {
+                                            // 持续音铺底整个台词时长
+                                            const sSrc = offlineCtxSfx.createBufferSource();
+                                            sSrc.buffer = sBuffer;
+                                            const sGain = offlineCtxSfx.createGain();
+                                            const fadeInDur = 0.5;
+                                            const fadeOutDur = 0.5;
+                                            const finalAmbientVol = (evt.line.sfxVolume ?? 0.5) * (libItem?.volume ?? 1.0) * 0.7;
+
+                                            sGain.gain.setValueAtTime(0, evt.startTime);
+                                            sGain.gain.linearRampToValueAtTime(finalAmbientVol, evt.startTime + fadeInDur);
+                                            const ambientEnd = evt.startTime + evt.duration + fadeOutDur;
+                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientEnd - fadeOutDur);
+                                            sGain.gain.linearRampToValueAtTime(0, ambientEnd);
+
+                                            sSrc.connect(sGain).connect(offlineCtxSfx.destination);
+                                            sSrc.start(evt.startTime, 0, Math.min(sBuffer.duration, evt.duration + fadeOutDur));
+                                        } else {
+                                            // 瞬时音效
+                                            const sSrc = offlineCtxSfx.createBufferSource();
+                                            sSrc.buffer = sBuffer;
+                                            const sGain = offlineCtxSfx.createGain();
+                                            sGain.gain.value = (evt.line.sfxVolume ?? 0.5) * (libItem?.volume ?? 1.0);
+
+                                            const sTrimStart = libItem?.trimStart ?? 0;
+                                            const sTrimEnd = libItem?.trimEnd ?? 1;
+                                            const sOffset = sBuffer.duration * sTrimStart;
+                                            const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
+
+                                            sSrc.connect(sGain).connect(offlineCtxSfx.destination);
+                                            sSrc.start(sfxTime, sOffset, sDuration);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        const renderedSfxBuf = await offlineCtxSfx.startRendering();
+                        const sfxWavBlob = bufferToWave(renderedSfxBuf, renderedSfxBuf.length);
+
+                        // 3. 构造时间线元数据 JSON（严格对齐的时间轴信息，方便导入剪映/PR）
+                        exportStatus.value = '打包并导出分轨文件...';
+                        await new Promise(r => requestAnimationFrame(r));
+
+                        const timelineMetadata = {
+                            version: '1.5',
+                            exportedAt: new Date().toISOString(),
+                            totalDuration: totalDuration,
+                            sampleRate: sampleRate,
+                            tracks: {
+                                dialogue: 'dialogue_track.wav',
+                                sfx: 'sfx_track.wav'
+                            },
+                            events: events.map(e => ({
+                                id: e.id,
+                                type: e.type,
+                                role: e.role,
+                                text: e.text,
+                                startTime: e.startTime,
+                                duration: e.duration,
+                                sfx: e.sfx || []
+                            }))
+                        };
+
+                        const jsonBlob = new Blob([JSON.stringify(timelineMetadata, null, 2)], { type: 'application/json' });
+
+                        const downloadBlob = (blob, filename) => {
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                        };
+
+                        // 依次触发分轨下载
+                        const timestamp = Date.now();
+                        downloadBlob(dialogueWavBlob, `dialogue_track_${timestamp}.wav`);
+                        await new Promise(r => setTimeout(r, 400));
+                        downloadBlob(sfxWavBlob, `sfx_track_${timestamp}.wav`);
+                        await new Promise(r => setTimeout(r, 400));
+                        downloadBlob(jsonBlob, `timeline_metadata_${timestamp}.json`);
+
+                        alert('分轨导出成功！已自动下载：\n1. 纯语音轨 (dialogue_track.wav)\n2. 纯音效轨 (sfx_track.wav)\n3. 时间线元数据 (timeline_metadata.json)\n\n两轨时间线严格一致，方便后期独立后期混音。');
 
                     } catch (e) {
                         console.error(e);
@@ -4863,7 +5826,7 @@
                 const EXPORT_TAIL_PADDING_SEC = 1.02;
 
                 // --- 脚本制作逻辑 ---
-                const splitScript = () => {
+                const splitScript = async () => {
                     if (!rawScript.value.trim()) return alert('请输入原文内容');
 
                     let text = rawScript.value.replace(/\r\n/g, '\n');
@@ -4873,7 +5836,7 @@
                         .map(l => l.trim())
                         .filter(l => l.length > 0);
 
-                    scriptLines.value = lines.map(text => ({
+                    const rawLines = lines.map(text => ({
                         id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
                         type: 'dialogue',
                         role: '旁白',
@@ -4889,6 +5852,7 @@
                         audioUrl: '',
                         isGenerating: false
                     }));
+                    scriptLines.value = await normalizeDialogueLines(rawLines);
                 };
 
                 const addBgmBlock = () => {
@@ -5019,10 +5983,84 @@
                     el.style.height = el.scrollHeight + 'px';
                 };
 
+                const normalizeDialogueLines = async (lines) => {
+                    const { splitDialogueLine } = await unitaleLogicPromise;
+                    return lines.flatMap(line => line.type === 'dialogue' ? splitDialogueLine(line, 120) : [line]);
+                };
+
+                const splitEditedDialogue = async (index) => {
+                    const line = scriptLines.value[index];
+                    if (!line || line.type !== 'dialogue' || Array.from(line.text || '').length <= 120) return;
+                    const { splitDialogueLine } = await unitaleLogicPromise;
+                    const parts = splitDialogueLine(line, 120);
+                    scriptLines.value.splice(index, 1, ...parts);
+                    triggerAutoSave();
+                };
+
                 const addLineSfx = (line) => {
                     if (!line.sfx) line.sfx = [];
                     const defaultSfx = sfxLibrary.value.length > 0 ? sfxLibrary.value[0].name : 'New SFX';
-                    line.sfx.push({ name: defaultSfx, position: 0.5 });
+                    line.sfx.push({ name: defaultSfx, position: 0.5, source: 'local', lastQuery: defaultSfx, unmatchedHint: null });
+                };
+
+                const handleSfxNameChange = async (sfx, nextName) => {
+                    const query = String(nextName || '').trim();
+                    const libraryHit = sfxLibrary.value.find(lib => lib.name === query && lib.filename);
+                    if (libraryHit) {
+                        sfx.name = libraryHit.name;
+                        sfx.source = 'local';
+                        sfx.lastQuery = query;
+                        sfx.unmatchedHint = null;
+                    } else {
+                        const { updateSfxQuery } = await unitaleLogicPromise;
+                        updateSfxQuery(sfx, query);
+                    }
+                    triggerAutoSave();
+                };
+
+                const previewLineSfx = (sfx) => {
+                    const libraryItem = sfxLibrary.value.find(lib => lib.name === sfx.name && lib.filename);
+                    if (libraryItem?.description?.startsWith('本地扫描：') && !libraryItem.source) {
+                        return playPreview({ ...libraryItem, source: 'local_scan', scanRoot: sfxScanRootPath.value.trim() });
+                    }
+                    return playPreview(libraryItem || sfx);
+                };
+
+                const canPreviewSfx = (sfx) => {
+                    const libraryItem = sfxLibrary.value.find(lib => lib.name === sfx.name && lib.filename);
+                    return !!(libraryItem?.filename || (sfx?.filename && sfx?.scanRoot));
+                };
+
+                // 工单 C：单条 sfx 重新匹配（chip 上的 🔁 按钮）
+                const retrySingleSfx = async (line, idx) => {
+                    const s = line.sfx[idx];
+                    if (!s) return;
+                    const query = s.unmatchedHint || s.lastQuery || s.name;
+                    const result = await resolveUnmatchedSfx(query);
+                    if (result && result.name) {
+                        autoImportFreesoundHit(result, query);
+                        s.name = result.name;
+                        s.source = result.source || 'freesound_file';
+                        s.lastQuery = query;
+                        s.unmatchedHint = null;
+                        if (result.filename) {
+                            s.filename = result.filename;
+                            s.scanRoot = result.scanRoot || '';
+                        }
+                    } else {
+                        alert(`音效 "${query}" 在线检索仍未命中，请手动处理或稍后批量重试`);
+                    }
+                };
+
+                // 工单 C：tooltip & class 计算辅助
+                const getSfxSourceMeta = (source) => {
+                    switch (source) {
+                        case 'local': return { emoji: '🌿', cls: 'bg-emerald-50 border-emerald-100 text-emerald-700', label: '本地库' };
+                        case 'llm': return { emoji: '🧠', cls: 'bg-violet-50 border-violet-200 text-violet-700', label: 'LLM 兜底' };
+                        case 'freesound': return { emoji: '🌐', cls: 'bg-sky-50 border-sky-200 text-sky-700', label: 'Freesound 在线下载' };
+                        case 'unmatched':
+                        default: return { emoji: '⚠️', cls: 'bg-amber-50 border-amber-200 text-amber-700', label: '未命中' };
+                    }
                 };
 
                 const removeLineSfx = (line, index) => {
@@ -5510,9 +6548,9 @@ const generateVideo = async () => {
 
                     if (enabledSfx.length > 0) {
                         const sfxList = enabledSfx.map(s => `- ${s.name}: ${s.description}`).join('\n');
-                        sfxSection = `# 音效库 (Sound Effects)\n你还可以使用以下音效素材，请根据剧情需要插入：\n${sfxList}\n**注意：必须严格使用列表中的名称，严禁编造不存在的音效。且绝对禁止使用 BGM 库中的名称。**`;
+                        sfxSection = `# 音效库 (Sound Effects)\n你还可以使用以下音效素材，请根据剧情需要插入：\n${sfxList}\n**优先逐字使用列表中的名称；若剧情明确需要但列表中没有精确匹配，可输出写实、简洁的搜索关键词，系统将尝试 LLM 兜底重定向及 Freesound 在线检索。绝对禁止使用 BGM 库中的名称。**`;
                     } else {
-                        sfxSection = `# 音效库 (Sound Effects)\n当前音效库为空。\n**注意：请勿生成任何 'sfx' 字段。**`;
+                        sfxSection = `# 音效库 (Sound Effects)\n当前本地音效库为空。\n**剧情有明确声音线索时仍应生成 sfx 字段，并使用写实、简洁、适合检索的关键词命名；系统将尝试 LLM 兜底重定向及 Freesound 在线检索。绝对禁止使用 BGM 名称充当 SFX。**`;
                     }
 
                     let bgmSection = "";
@@ -5573,6 +6611,17 @@ const generateVideo = async () => {
 - 第一个 \`bgImage\` 对象必须出现在“第一个 dialogue 对象之前”，用于视频开场背景；允许开头存在 \`bgm\` 控制块。
 - 除开场第一张外，其余 \`bgImage\` 必须按剧情节奏插入在台词之间（至少间隔一个 \`dialogue\`），避免连续出现多个 \`bgImage\`。
 `;
+
+                        // 即使自定义 Prompt 未提及，也强制追加台词长度硬约束
+                        if (!finalPrompt.includes('120')) {
+                            finalPrompt += `
+
+## 台词长度硬约束（严格遵守）
+- 每个 dialogue 的 text_content **绝对不得超过 120 个字符（标点计入）**。
+- 优先在句号、问号、感叹号、分号、冒号、逗号等自然停顿处拆分，不要把合理短句拆得过碎。
+- 不得截断、遗漏或改写原文。
+`;
+                        }
                     }
 
                     try {
@@ -5608,12 +6657,74 @@ const generateVideo = async () => {
 
                         const parsed = JSON.parse(jsonStr);
                         if (Array.isArray(parsed)) {
-                            // 移除拦截逻辑，完全信任 Prompt (或允许用户手动修正幻觉)
                             const validParsed = parsed;
+
+                            // 角色名先做确定性清洗，再仅对低置信台词发起局部复核。
+                            const { normalizeRoleName, assessRoleConfidence, normalizeSfxAnnotation } = await unitaleLogicPromise;
+                            const uncertainRoleItems = [];
+                            validParsed.forEach((item, itemIndex) => {
+                                if ((item.type || 'dialogue') !== 'dialogue') return;
+                                item.role_name = normalizeRoleName(item.role_name || item.role || '旁白');
+                                const assessment = assessRoleConfidence(item.role_name);
+                                item._roleNeedsReview = assessment.needsReview;
+                                item._roleReviewReason = assessment.reason;
+                                if (assessment.needsReview) uncertainRoleItems.push({ item, itemIndex });
+                            });
+
+                            if (uncertainRoleItems.length > 0) {
+                                try {
+                                    const candidateRoles = [...new Set(validParsed
+                                        .filter(item => (item.type || 'dialogue') === 'dialogue' && !item._roleNeedsReview)
+                                        .map(item => item.role_name))];
+                                    const reviewCases = uncertainRoleItems.map(({ item, itemIndex }) => ({
+                                        index: itemIndex,
+                                        current_role: item.role_name,
+                                        previous: validParsed[itemIndex - 1]?.text_content || '',
+                                        text: item.text_content || item.text || '',
+                                        next: validParsed[itemIndex + 1]?.text_content || ''
+                                    }));
+                                    const reviewPrompt = `你是小说说话人复核器。候选角色：${JSON.stringify(candidateRoles)}。\n` +
+                                        `只复核下列低置信台词，依据说话提示语、连续对话轮次、动作主体和称谓关系判断。` +
+                                        `返回严格 JSON 数组，每项格式 {"index":数字,"role_name":"角色名","confidence":0到1}；无法确认时 confidence 低于0.8。\n` +
+                                        JSON.stringify(reviewCases);
+                                    const reviewBody = {
+                                        model: cfg.model,
+                                        messages: [{ role: 'user', content: reviewPrompt }],
+                                        stream: false,
+                                        temperature: 0.1
+                                    };
+                                    const reviewRes = await fetch(url, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+                                        body: JSON.stringify(reviewBody),
+                                        signal: analysisAbortController.value.signal
+                                    });
+                                    if (reviewRes.ok) {
+                                        const reviewData = await reviewRes.json();
+                                        const reviewContent = reviewData.choices[0]?.message?.content || '';
+                                        const reviewMatch = reviewContent.match(/\[\s*\{[\s\S]*\}\s*\]/);
+                                        const reviewed = JSON.parse(reviewMatch ? reviewMatch[0] : reviewContent.replace(/```json|```/g, '').trim());
+                                        reviewed.forEach(result => {
+                                            const target = validParsed[result.index];
+                                            const reviewedRole = normalizeRoleName(result.role_name);
+                                            const reviewedAssessment = assessRoleConfidence(reviewedRole);
+                                            // 复核结果必须属于候选角色集，防止模型凭空新增角色
+                                            if (target && candidateRoles.includes(reviewedRole) && Number(result.confidence) >= 0.8 && !reviewedAssessment.needsReview) {
+                                                target.role_name = reviewedRole;
+                                                target._roleNeedsReview = false;
+                                                target._roleReviewReason = '';
+                                            }
+                                        });
+                                    }
+                                } catch (reviewError) {
+                                    if (reviewError.name === 'AbortError') throw reviewError;
+                                    console.warn('低置信角色局部复核失败，将保留待确认标记:', reviewError);
+                                }
+                            }
 
                             const newRoles = new Set();
                             validParsed.forEach(item => {
-                                const r = item.role_name || item.role;
+                                const r = (item.type || 'dialogue') === 'dialogue' ? (item.role_name || item.role) : '';
                                 if (r) newRoles.add(r);
                             });
 
@@ -5643,8 +6754,8 @@ const generateVideo = async () => {
                             });
                             characters.value = newCharacterList;
 
-                            scriptLines.value = validParsed.map(item => {
-                                // 通用模糊匹配函数
+                            const mappedLines = validParsed.map(item => {
+                                // 通用模糊匹配函数（仅做本地字符串匹配，未命中时返回空，统一在外部处理兜底）
                                 const findBestMatch = (target, library) => {
                                     if (!target) return '';
                                     const t = target.trim().toLowerCase();
@@ -5672,27 +6783,42 @@ const generateVideo = async () => {
                                     matchedFilter = findBestMatch(item.filter, filterLibrary.value);
                                 }
 
-                                // 2. 匹配音效
+                                // 2. 匹配音效（仅做本地字符串匹配，未命中的名称保留为 unmatchedSfx 用于后续兜底处理）
                                 let matchedSfx = [];
+                                let unmatchedSfxNames = [];
                                 if (item.sfx && Array.isArray(item.sfx)) {
-                                    matchedSfx = item.sfx.map(s => ({
-                                        name: findBestMatch(s.name, sfxLibrary.value) || s.name,
-                                        position: s.position
-                                    }));
+                                    matchedSfx = item.sfx.map(normalizeSfxAnnotation).filter(Boolean).map(s => {
+                                        const matched = findBestMatch(s.name, sfxLibrary.value);
+                                        if (!matched) unmatchedSfxNames.push(s.name);
+                                        return {
+                                            name: matched || s.name,
+                                            position: s.position,
+                                            // source: 'local'（本地命中）/ 'unmatched'（未命中，待兜底）。
+                                            // 兜底成功后由 runUnmatchedSfxWorkflow 回写为 'llm' 或 'freesound'
+                                            source: matched ? 'local' : 'unmatched',
+                                            // lastQuery 保留原始名，供"重新匹配"按钮复用
+                                            lastQuery: s.name,
+                                            unmatchedHint: !matched ? s.name : null
+                                        };
+                                    });
                                 }
 
                                 // 3. 匹配 BGM
                                 let matchedBgmName = '';
+                                let unmatchedBgmName = '';
                                 if (item.type === 'bgm' && item.action === 'play') {
                                     const rawName = item.name || item.bgmName || '';
-                                    matchedBgmName = findBestMatch(rawName, bgmLibrary.value) || rawName;
+                                    matchedBgmName = findBestMatch(rawName, bgmLibrary.value);
+                                    if (!matchedBgmName) unmatchedBgmName = rawName;
                                 }
 
                                 return {
                                     id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
                                     type: item.type || 'dialogue',
                                     // Dialogue fields
-                                    role: item.role_name || item.role || '旁白',
+                                     role: item.role_name || item.role || '旁白',
+                                     roleNeedsReview: !!item._roleNeedsReview,
+                                     roleReviewReason: item._roleReviewReason || '',
                                     text: item.text_content || item.text || item.content || '',
                                     emotion: item.emotion || '平静',
                                     intensity: item.intensity || '中等',
@@ -5716,6 +6842,38 @@ const generateVideo = async () => {
                                     imageUrl: ''
                                 };
                             });
+                            scriptLines.value = await normalizeDialogueLines(mappedLines);
+
+                            // Phase 6：未命中音效的统一弹窗确认 + 一次性自动兜底
+                            // 收集所有未命中的音效名称（去重）。source==='unmatched' 已在分析阶段写入。
+                            const unmatchedNames = new Set();
+                            scriptLines.value.forEach(line => {
+                                if (line.sfx && Array.isArray(line.sfx)) {
+                                    line.sfx.forEach(s => {
+                                        if (s.source === 'unmatched' || s.unmatchedHint) {
+                                            unmatchedNames.add(s.unmatchedHint || s.name);
+                                        }
+                                    });
+                                }
+                            });
+
+                            if (unmatchedNames.size > 0) {
+                                const nameList = Array.from(unmatchedNames);
+                                const summary = nameList.map(n => `• ${n}`).join('\n');
+                                const tipMsg = `以下 ${nameList.length} 个音效在本地库未命中：\n${summary}\n\n` +
+                                    `可选操作：\n` +
+                                    `1) 点击"确定" — 系统自动执行 LLM 兜底映射 + Freesound 在线检索\n` +
+                                    `2) 点击"取消" — 保留原名称，稍后可在"音效与滤波器"页用"🔁 重新匹配"按钮再试\n` +
+                                    `（提示：LLM 兜底需在"模型配置"页配置；Freesound 需启用在线检索开关）`;
+                                const doFallback = window.confirm(tipMsg);
+                                if (doFallback) {
+                                    // 一次 confirm 启动，内部逐条串行 resolve（resolve 本身不再弹窗）
+                                    // 仍未命中的子集由 runUnmatchedSfxWorkflow 收尾时再二次 confirm
+                                    (async () => {
+                                        await runUnmatchedSfxWorkflow(nameList);
+                                    })();
+                                }
+                            }
                         } else {
                             alert('AI 返回格式异常，请重试');
                         }
@@ -6013,6 +7171,15 @@ const generateVideo = async () => {
                     // TTS Actions
                     ttsForm, isEditingTts,
                     saveTtsConfig, editTtsConfig, deleteTtsConfig, resetTtsForm,
+                    // LLM 兜底匹配 & Freesound 在线检索 (Phase 2)
+                    fallbackConfigs, fallbackForm, isEditingFallback, currentFallbackConfigId,
+                    saveFallbackConfig, editFallbackConfig, deleteFallbackConfig, resetFallbackForm,
+                    freesoundToken, showFreesoundToken, freesoundEnabled, freesoundAutoImport, saveFreesoundConfig,
+                    llmFallbackMatch, fetchFreesoundSfx, confirmSfxReplace,
+                    resolveUnmatchedSfx, runUnmatchedSfxWorkflow, retryAllUnmatchedSfx,
+                    // Phase 3/4：本地音效文件夹扫描
+                    sfxScanRootPath, sfxScanRootExists, sfxScanRootStatus, isScanningLocal, scannedSfxItems, sfxSaveDir,
+                    setSfxScanRoot, getSfxScanRoot, scanLocalSfx, importScannedSfx, importSingleScannedSfx, clearScannedSfx,
 
                     // Character Actions (New)
                     characters, addCharacter, deleteCharacter,
@@ -6031,6 +7198,8 @@ const generateVideo = async () => {
                     sfxLibrary, sfxForm, isEditingSfx,
                     saveSfx, editSfx, deleteSfx, resetSfxForm, handleSfxFileUpload,
                     addLineSfx, removeLineSfx,
+                    retrySingleSfx, getSfxSourceMeta,
+                    unmatchedSfxCount,
 
                     // BGM Actions
                     bgmLibrary, bgmForm, isEditingBgm,
@@ -6039,7 +7208,8 @@ const generateVideo = async () => {
                     // Audition Actions
                     availableRoles, isAuditioningId, generateLineAudio, playLineAudio, clearLineAudio,
 
-                    playPreview, previewPlayingFile, downloadTimbre, downloadSfxOrBgm, downloadLineAudio,
+                    playPreview, previewPlayingFile, downloadTimbre, openTimbreFolder, downloadSfxOrBgm, downloadLineAudio,
+                    timbreSaveDir, defaultTimbreSaveDir, saveTimbreSaveDir,
                     send, stopGeneration, clearAll,
 
                     playbackProgress, // Export for template
@@ -6050,7 +7220,8 @@ const generateVideo = async () => {
                     isGeneratingVideo,
 
                     // Script Actions
-                    rawScript, scriptLines, splitScript, removeScriptLine, autoResizeTextarea, analyzeScript, isAnalyzingScript, rawAnalysisResult,
+                    rawScript, scriptLines, splitScript, removeScriptLine, autoResizeTextarea, splitEditedDialogue, analyzeScript, isAnalyzingScript, rawAnalysisResult,
+                    handleSfxNameChange, previewLineSfx, canPreviewSfx, confirmLineRole,
                     addBgmBlock, addDialogueBlock, addBgImageBlock, selectedLineIndex,
                     drawWaveform, startDragTrim, // Exported for template
                     generateAllLines, isGeneratingAll, clearAllGeneratedAudio,
