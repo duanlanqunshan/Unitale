@@ -57,24 +57,34 @@ backups/
 
 # === 9. 大型本地资源（按需保留本地）===
 人物声音/
+voice/
 voice/old/
 
 # === 10. Build 产物 ===
 dist/
 build/
 
-# === 不要上传的大型工程存档（超80MB JSON）===
+# === 不要上传的大型工程存档（>50MB JSON）===
 Unitale Basic Project for EN.json
-初始音效工程文件(含音效音色).json
+初始音效工程文件*.json
+初始工程文件*.json
+Unitale工程文件_*.json
 
 # === 截图目录（非文档，避免污染）===
 截图/
 *.min.css
 *.min.js
 
-# === ��ʱ��ɫ�������Ӧ���汾�⣩===
+# === 临时音色、音频导出，不应进版本库 ===
 timbres/*.wav
 timbres/*.mp3
+storyforge_export_*.wav
+storyforge_export_*.mp3
 
 repro_input.txt
+
+# === 不要上传的导出 wav / 大音频 ===
+*.export.wav
+*.export.mp3
+orig_export*
 
