@@ -422,6 +422,12 @@
                     <button type="button" @click.prevent="saveTimbreSaveDir"
                         class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all">保存目录设置</button>
                 </div>
+                <div class="border-t border-amber-200 pt-4">
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">音色 → TTS 后端同步</label>
+                    <p class="text-[10px] text-slate-400 mt-1 mb-2">TTS 后端（IndexTTS）按 audio_path 哈希从自己的 PROMPTS_DIR 取音色文件，所以本地音色必须先上传过去才能合成。点下方按钮把当前所有音色一次性同步到当前选中的 TTS 服务，避免合成时报"音频不存在"。</p>
+                    <button type="button" @click.prevent="syncTimbresWithServer"
+                        class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all">🔄 同步音色到 TTS 服务器</button>
+                </div>
             </section>
             <!-- 音色管理区域 -->
             <section class="space-y-6">
@@ -646,6 +652,11 @@
                             :disabled="unmatchedSfxCount === 0"
                             class="px-4 py-2 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                             🔁 重新匹配 {{ unmatchedSfxCount }} 条未命中音效
+                        </button>
+                        <button type="button" @click="downloadUnmatchedSfxList"
+                            :disabled="unmatchedSfxCount === 0"
+                            class="px-4 py-2 bg-slate-700 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            ⬇️ 下载未匹配音效清单
                         </button>
                         <span class="text-xs text-amber-800">
                             点击后将自动对当前脚本中所有未命中的音效执行 LLM 兜底 + Freesound 在线检索。<br>
@@ -1153,6 +1164,13 @@
                                     停止播放
                                 </button>
                             </div>
+
+                            <div class="flex flex-wrap gap-2" v-if="unmatchedSfxCount > 0">
+                                <button type="button" @click="downloadUnmatchedSfxList"
+                                    class="flex-1 px-2 py-2 bg-slate-700 text-white rounded-lg text-sm font-bold hover:bg-slate-800 transition-all flex items-center justify-center">
+                                    ⬇️ 下载未匹配音效清单 ({{ unmatchedSfxCount }} 条)
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1540,6 +1558,15 @@
                                             @click="retrySingleSfx(line, sIdx)"
                                             class="ml-1 text-slate-500 hover:text-blue-600 font-bold"
                                             title="单独重新匹配此音效（LLM 兜底 + Freesound 在线检索）">🔁</button>
+                                        <!-- ★ 未匹配音效手动绑定：用户可上传本地音频或从扫描目录挑一个文件，
+                                             立即把这条 unmatched chip 变成可播放状态。 -->
+                                        <label v-if="sfx.source === 'unmatched' || sfx.unmatchedHint"
+                                            class="ml-1 text-slate-500 hover:text-emerald-600 font-bold cursor-pointer"
+                                            title="手动绑定：从本地选一个音频文件，直接关联到此未匹配音效">
+                                            📁
+                                            <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac"
+                                                class="hidden" @change="bindUploadedSfx(sfx, $event)">
+                                        </label>
                                         <button @click="removeLineSfx(line, sIdx)"
                                             class="ml-2 text-slate-400 hover:text-red-500 font-bold">×</button>
                                     </div>
@@ -1550,11 +1577,11 @@
 
                                 <!-- 文本与音效区域 -->
                                 <div class="w-full flex flex-col gap-2 min-w-0">
-                                    <textarea v-model="line.text" rows="2"
-                                        class="w-full h-full bg-transparent border-none focus:ring-0 text-sm text-slate-700 resize-none leading-relaxed py-1.5"
+<textarea v-model="line.text" :data-line-index="index" rows="1"
+                                        class="w-full bg-transparent border border-slate-200 rounded focus:ring-0 text-sm text-slate-700 resize-none leading-relaxed py-1.5 px-2"
                                         @input="autoResizeTextarea($event)" @blur="splitEditedDialogue(index)"></textarea>
-                                    <div class="text-right text-[10px]" :class="Array.from(line.text || '').length > 120 ? 'text-red-600 font-bold' : 'text-slate-400'">
-                                        {{ Array.from(line.text || '').length }}/120
+                                    <div class="text-right text-[10px]" :class="Array.from(line.text || '').length > 80 ? 'text-red-600 font-bold' : 'text-slate-400'">
+                                        {{ Array.from(line.text || '').length }}/80
                                     </div>
                                 </div>
                             </div>
@@ -1690,6 +1717,10 @@
                     { id: 'sys_8', name: '平静', vector: [0, 0, 0, 0, 0, 0, 0, 1] }
                 ];
                 const isSystemEmotion = (name) => SYSTEM_EMOTIONS.some(e => e.name === name);
+
+                // 代词/泛指类角色名集合：与 unitale_logic.mjs 的 PRONOUN_ROLES 保持一致，
+                // 用于在候选角色集与复核结果判定中排除这类异常角色名，避免"待确认"扩散。
+                const PRONOUN_FOR_REVIEW = new Set(['他', '她', '它', '你', '你们', '他们', '她们', '众人', '某人']);
 
                 // --- IndexedDB Persistence Logic ---
                 const DB_NAME = 'UnitaleDB';
@@ -2157,6 +2188,7 @@
 
 1. **可选情绪 (Emotion)**: \${emotionList}
    - **注意**: 必须严格从上述列表中选择，**严禁**编造列表之外的情绪名称。
+   - **emotion 字段必填**：每个 dialogue 对象的 \`emotion\` 字段都必须填写，**不允许留空、返回 null、空字符串或列表外的情绪词**。无法判断时一律填 "平静"。
    - 旁白通常选择 "平静"，也可根据氛围选择其他情绪。
 
 2. **可选强度 (Intensity)**: 微弱, 稍弱, 中等, 较强, 强烈
@@ -2170,6 +2202,13 @@
 - **严禁删改**: **绝对禁止**删除原文中的说话人提示语（如“他低声说”、“笑着问道”）。这些内容必须作为“旁白”单独提取出来。
 - **内容提取**: 提取对话内容和所有非对话的旁白。
 - **角色识别**: 根据小说内容分析说话人。旁白的角色名统一标记为“旁白”。
+- **叙述 ≠ 对话**: 这是最关键且最易错的规则——必须严格区分"叙述句提到某个人名"与"那个人正在说话"。
+  - 判定法则（按顺序执行）：
+    1. 片段内容是否在引号内？在 → 视为台词，归属说话人；
+    2. 不在引号内的片段，**默认就是旁白**（role_name="旁白"），无论其中是否包含人名、动作主语或代词。
+    3. 例如“老李猛地按住了我的手，脸色惨白。”是叙述动作，role_name 必须是“旁白”，**不得因为主语是“老李”就标为老李**。
+    4. 同理“我愣住了，看着办公桌上疯狂震动的座机。”是旁白，不是“我”在说话。
+  - 反向确认：只有引号内台词才需要分配说话人，引号外一律旁白。绝不要把"叙述句的主语"误当作 speaker。
 - **说话人证据优先级**: 优先使用引号附近的“某某说/问/喊/低声道”等说话提示语，其次结合连续对话轮次、动作执行主体、称谓关系与前后文判断；不得仅凭最近出现的人名猜测。
 - **角色规范化**: 同一人物的本名、明确昵称和称谓应统一为一个稳定角色名；Narrator/叙述者统一输出“旁白”。除原文确实以第一人称角色出现且身份无法解析外，不要把“他/她/你/某人”等代词直接作为新角色名。
 - **内心与引述**: 内心独白归属正在思考的角色；角色转述他人话语时，若是当前角色发声则仍归当前角色，不要误归被引述者。
@@ -2489,6 +2528,25 @@
                             const res = await fetch(filename);
                             if (!res.ok) throw new Error(`Failed to fetch ${filename}`);
                             arrayBuffer = await res.arrayBuffer();
+                        } else if (/^[A-Za-z]:[\\/]/.test(filename)) {
+                            // Windows 绝对磁盘路径：若文件落在后端静态目录下（如 ...\repo\timbres\foo.wav）
+                            // 可转为相对 URL /timbres/foo.wav；否则无法直接访问，回退到 IndexedDB / localFileMap。
+                            const normalized = filename.replace(/\\/g, '/');
+                            const m = normalized.match(/[/\\](timbres|voice)[/\\](.+)$/i);
+                            if (m) {
+                                const relUrl = `/${m[1]}/${m[2].split(/[\\/]/).pop()}`;
+                                const res = await fetch(relUrl);
+                                if (res.ok) {
+                                    arrayBuffer = await res.arrayBuffer();
+                                } else {
+                                    // 同名顶层文件兜底
+                                    const rootRes = await fetch(`/${m[2].split(/[\\/]/).pop()}`);
+                                    if (!rootRes.ok) throw new Error('Not found in static dir');
+                                    arrayBuffer = await rootRes.arrayBuffer();
+                                }
+                            } else {
+                                throw new Error('Absolute path not under static mount');
+                            }
                         } else {
                             // 兜底：尝试从本地相对路径（如 voice 目录）加载
                             try {
@@ -2560,8 +2618,15 @@
                         return;
                     }
 
-                    const { resolveSfxPlaybackUrl } = await unitaleLogicPromise;
-                    const playbackUrl = resolveSfxPlaybackUrl(item);
+                    let playbackUrl;
+                    if (typeof item === 'string') {
+                        // 字符串传入（如音色 refPath、绝对磁盘路径、Blob URL、相对文件名）：
+                        // resolveSfxPlaybackUrl 只接受对象，这里直接用字符串本身让 loadAudioBuffer 自己分流处理。
+                        playbackUrl = filename;
+                    } else {
+                        const { resolveSfxPlaybackUrl } = await unitaleLogicPromise;
+                        playbackUrl = resolveSfxPlaybackUrl(item);
+                    }
                     if (!playbackUrl) {
                         previewError.value = `音效“${item?.name || '未命名'}”尚无可播放素材`;
                         alert(previewError.value);
@@ -2724,6 +2789,7 @@
                 // Fix 1.5: 列表重排后强制重绘所有 canvas 波形，避免 Vue DOM 复用导致波形错位
                 watch(scriptLines, async () => {
                     await nextTick();
+                    let hasWaveform = false;
                     for (const line of scriptLines.value) {
                         if (!line.audioUrl) continue;
                         const rowEl = lineRefs.value[line.id];
@@ -2734,8 +2800,23 @@
                             canvas._lastUrl = null;
                             canvas._lastItemId = null;
                             drawWaveform(canvas, line);
+                            hasWaveform = true;
                         }
                     }
+                    // STAGE 2 音频恢复期间，每次 audioUrl 变更都会触发本回调与布局抖动，
+                    // 顺手把同帧塌缩为 1 行的 textarea 重新调整回来，避免刷新后文本框丢失自适应。
+                    if (hasWaveform) {
+                        document.querySelectorAll('textarea[data-line-index]').forEach(el => {
+                            el.style.height = 'auto';
+                            el.style.height = el.scrollHeight + 'px';
+                        });
+                    }
+                }, { flush: 'post' });
+
+                // 程序化赋值（刷新恢复、AI 分析、导入存档）不会触发 textarea 的 @input，
+                // 需要主动监听 scriptLines 变化后统一调整高度
+                watch(scriptLines, async () => {
+                    await resizeAllTextareas();
                 }, { flush: 'post' });
 
                 watch(bgImageCount, () => {
@@ -2894,7 +2975,10 @@
                                  characters.value.forEach(c => { if (c.volume === undefined) c.volume = 1.0; });
                              }
                              
-                             console.log('Project text data restored. Loading audio in background...');
+                              console.log('Project text data restored. Loading audio in background...');
+                              // 初次恢复存档后显式触发 textarea 自适应（await + 延迟保险，覆盖大列表渲染）
+                              await resizeAllTextareas();
+                              setTimeout(() => resizeAllTextareas(), 500);
  
                              // --- STAGE 2: Load audio assets in the background ---
                              setTimeout(async () => {
@@ -2941,15 +3025,29 @@
                                      }
                                  }
                                  console.log('Background audio loading complete.');
+                                 // 关键修复：STAGE 2 持续数秒，期间每次 line.audioUrl 变更都会触发波形重绘与布局抖动，
+                                 // 之前 500ms 的兜底 resize 远早于 STAGE 2 完成，导致刷新后 textarea 仍塌缩为 1 行。
+                                 // 在 STAGE 2 真正完成的末尾再次统一调整所有 textarea 高度，并再保险一次延迟回调。
+                                 if (typeof resizeAllTextareas === 'function') {
+                                     try { await resizeAllTextareas(); } catch (e) { console.warn('STAGE2 resize 失败', e); }
+                                     setTimeout(() => { try { resizeAllTextareas(); } catch (_) {} }, 300);
+                                 }
                              }, 100); // Small delay to let UI render first
  
                          }
-                     } catch (e) {
-                         console.error('Failed to restore from IndexedDB', e);
-                     } finally {
-                         // Slightly longer delay to ensure background loading has started
-                         setTimeout(() => { isRestoring.value = false; }, 500);
-                     }
+                      } catch (e) {
+                          console.error('Failed to restore from IndexedDB', e);
+                      } finally {
+                          // Slightly longer delay to ensure background loading has started
+                          setTimeout(() => { isRestoring.value = false; }, 500);
+                          // 后台异步把音色 precinct 同步到 TTS 后端，避免合成时报"音频不存在"。
+                          // 不阻塞 UI 失败也不影响主流程，仅在 console 留痕。
+                          setTimeout(() => {
+                              if (typeof syncTimbresWithServer === 'function' && currentTtsConfig.value) {
+                                  syncTimbresWithServer().catch(err => console.warn('启动时自动同步音色到 TTS 后端失败:', err));
+                              }
+                          }, 2000);
+                      }
                 });
 
                 const currentTtsConfig = computed(() => {
@@ -3391,6 +3489,55 @@
                 // Phase 6 兼容老调用名（若其他地方还用 confirmSfxReplace，转发到 resolveUnmatchedSfx）
                 const confirmSfxReplace = async (unmatchedName) => resolveUnmatchedSfx(unmatchedName);
 
+                // 下载未匹配音效清单：收集所有 source==='unmatched' 或带 unmatchedHint 的 sfx，
+                // 按音效名分组汇总出现在哪些台词序号，输出为 txt 文件方便离线到 Freesound 等站点搜索。
+                const downloadUnmatchedSfxList = () => {
+                    const groups = new Map();
+                    scriptLines.value.forEach((line, index) => {
+                        if (!line.sfx || !Array.isArray(line.sfx)) return;
+                        line.sfx.forEach(s => {
+                            if (s.source !== 'unmatched' && !s.unmatchedHint) return;
+                            const name = s.unmatchedHint || s.name || '(未命名)';
+                            if (!groups.has(name)) groups.set(name, []);
+                            groups.get(name).push(index + 1);
+                        });
+                    });
+                    if (groups.size === 0) {
+                        alert('当前没有未匹配的音效');
+                        return;
+                    }
+                    const now = new Date();
+                    const pad = n => String(n).padStart(2, '0');
+                    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                    const totalOccurrences = [...groups.values()].reduce((sum, arr) => sum + arr.length, 0);
+                    let content = '';
+                    content += '='.repeat(30) + '\n';
+                    content += `未匹配音效清单\n`;
+                    content += `生成时间：${stamp}\n`;
+                    content += `共 ${groups.size} 条未匹配音效，涉及 ${totalOccurrences} 处台词\n`;
+                    content += '='.repeat(30) + '\n\n';
+                    let i = 1;
+                    for (const [name, lines] of groups) {
+                        const deduped = [...new Set(lines)].sort((a, b) => a - b);
+                        content += `【${i}】${name}\n`;
+                        deduped.forEach(lineNo => {
+                            content += `  - 台词 #${lineNo}\n`;
+                        });
+                        content += '\n';
+                        i++;
+                    }
+                    const fileStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+                    const blob = new Blob(['\uFEFF' + content], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `未匹配音效清单_${fileStamp}.txt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                };
+
                 // 工单 D：手动重新匹配按钮的入口
                 const retryAllUnmatchedSfx = async () => {
                     const unmatchedNames = new Set();
@@ -3628,10 +3775,33 @@
                     for (const t of timbres.value) {
                         if (!t.refPath) continue;
 
-                        // 检查内存中是否有该文件
-                        const file = localFileMap.value.get(t.refPath);
+                        // 1. 优先用内存中的 blob
+                        let file = localFileMap.value.get(t.refPath);
+
+                        // 2. 没有 blob 且 refPath 是本地 Timbres/Voice 静态挂载目录下的磁盘路径：
+                        //    走后端 StaticFiles 拉一份文件流，转给 TTS 后端，避免 blob 丢失就同步不了。
+                        if (!file && /^[A-Za-z]:[\\/]/.test(t.refPath)) {
+                            const normalized = String(t.refPath).replace(/\\/g, '/');
+                            const m = normalized.match(/[/\\](timbres|voice)[/\\](.+)$/i);
+                            if (m) {
+                                try {
+                                    const basename = m[2].split(/[\\/]/).pop();
+                                    const pullRes = await fetch(`/${m[1]}/${basename}`);
+                                    if (pullRes.ok) {
+                                        const pullBlob = await pullRes.blob();
+                                        file = new File([pullBlob], basename, { type: pullBlob.type || 'audio/wav' });
+                                        // 顺便预热 localFileMap，后续合成可直接命中
+                                        localFileMap.value.set(t.refPath, file);
+                                        console.log(`从静态挂载兜底拉到音色: ${t.refPath}`);
+                                    }
+                                } catch (e) {
+                                    console.warn(`从静态挂载兜底拉取音色失败: ${t.refPath}`, e);
+                                }
+                            }
+                        }
+
                         if (!file) {
-                            console.warn(`音色文件未在内存中找到 (可能未导入或丢失): ${t.refPath}`);
+                            console.warn(`音色文件未在内存中找到，且无法从静态挂载兜底: ${t.refPath}`);
                             continue;
                         }
 
@@ -4166,25 +4336,54 @@
                         let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
                         if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
 
-                        const voiceFile = localFileMap.value.get(char.voiceFile);
-                        if (voiceFile) {
-                            try {
-                                const checkUrl = `${baseUrl}/v1/check/audio?file_name=${encodeURIComponent(char.voiceFile)}`;
-                                const checkRes = await fetch(checkUrl, { signal: internalSignal });
-                                let exists = false;
-                                if (checkRes.ok) {
-                                    exists = (await checkRes.json()).exists;
+                        // 主动确保 TTS 后端已持有该音色文件。
+                        // TTS 后端的 /v2/synthesize 把 audio_path 哈希后到自家 PROMPTS_DIR 取文件，
+                        // 若不先 /v1/upload_audio 上传过去就会返回 404 "音频不存在"。
+                        // 因此这里不依赖 localFileMap 是否有 blob —— 没有就先尝试从默认 timbres 目录拉。
+                        try {
+                            const checkUrl = `${baseUrl}/v1/check/audio?file_name=${encodeURIComponent(char.voiceFile)}`;
+                            const checkRes = await fetch(checkUrl, { signal: internalSignal });
+                            let exists = false;
+                            if (checkRes.ok) {
+                                exists = (await checkRes.json()).exists;
+                            }
+                            if (!exists) {
+                                // 优先用 localFileMap 的 blob（最稳）
+                                let uploadFile = localFileMap.value.get(char.voiceFile);
+                                let uploadFromUrl = null;
+                                // 兜底：blob 不在内存时，若 refPath 是 ...\timbres\foo.wav 或 ...\voice\foo.wav，
+                                // 走后端静态挂载 /timbres/foo.wav / /voice/foo.wav 取文件流后转给 TTS。
+                                if (!uploadFile && /^[A-Za-z]:[\\/]/.test(char.voiceFile)) {
+                                    const normalized = String(char.voiceFile).replace(/\\/g, '/');
+                                    const m = normalized.match(/[/\\](timbres|voice)[/\\](.+)$/i);
+                                    if (m) {
+                                        const basename = m[2].split(/[\\/]/).pop();
+                                        uploadFromUrl = `/${m[1]}/${basename}`;
+                                    }
                                 }
-                                if (!exists) {
+                                if (uploadFile) {
                                     const formData = new FormData();
-                                    formData.append('audio', voiceFile, char.voiceFile);
+                                    formData.append('audio', uploadFile, char.voiceFile);
                                     formData.append('full_path', char.voiceFile);
                                     await fetch(`${baseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
+                                } else if (uploadFromUrl) {
+                                    const pullRes = await fetch(uploadFromUrl, { signal: internalSignal });
+                                    if (!pullRes.ok) {
+                                        throw new Error(`从默认音色目录拉取失败 (${pullRes.status}): ${char.voiceFile}`);
+                                    }
+                                    const pullBlob = await pullRes.blob();
+                                    const fallbackFile = new File([pullBlob], char.voiceFile.split(/[\\/]/).pop() || 'voice.wav', { type: pullBlob.type || 'audio/wav' });
+                                    const formData = new FormData();
+                                    formData.append('audio', fallbackFile, char.voiceFile);
+                                    formData.append('full_path', char.voiceFile);
+                                    await fetch(`${baseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
+                                } else {
+                                    throw new Error(`音色文件 "${char.voiceFile}" 未在上传到 TTS 后端，且无法从默认音色目录兜底拉取。\n请在"音色源配置"页点"同步音色到 TTS 服务器"按钮，或检查音色 refPath 是否落在 timbres/voice 静态挂载目录下。`);
                                 }
-                            } catch (e) {
-                                if (e.name !== 'AbortError') console.warn('自动上传音色文件失败:', e);
-                                else throw e; // Propagate abort
                             }
+                        } catch (e) {
+                            if (e.name !== 'AbortError') console.warn('确保音色上传到 TTS 后端失败:', e);
+                            else throw e; // Propagate abort
                         }
 
                         const synthRes = await fetch(`${baseUrl}/v2/synthesize`, {
@@ -5983,16 +6182,34 @@
                     el.style.height = el.scrollHeight + 'px';
                 };
 
+                // 统一调整所有台词 textarea 高度（程序化赋值后 v-model 不会触发 @input）
+                // 使用双重 rAF + setTimeout 兜底：Vue 渲染大量 v-for 项可能跨多帧，
+                // 单次 nextTick 拿到的 textarea 可能尚未应用最新样式/尺寸，导致 scrollHeight 仍是一行高度。
+                const resizeAllTextareas = async () => {
+                    await nextTick();
+                    const applyResize = () => {
+                        document.querySelectorAll('textarea[data-line-index]').forEach(el => {
+                            el.style.height = 'auto';
+                            el.style.height = el.scrollHeight + 'px';
+                        });
+                    };
+                    applyResize();
+                    // 二次确认：下一帧再跑一次，覆盖 Vue 异步批量渲染的最后一批 DOM
+                    requestAnimationFrame(() => requestAnimationFrame(applyResize));
+                    // 兜底：200ms 后再补一次，覆盖 v-for 大列表 + 图片音频恢复引起的二次布局抖动
+                    setTimeout(applyResize, 200);
+                };
+
                 const normalizeDialogueLines = async (lines) => {
                     const { splitDialogueLine } = await unitaleLogicPromise;
-                    return lines.flatMap(line => line.type === 'dialogue' ? splitDialogueLine(line, 120) : [line]);
+                    return lines.flatMap(line => line.type === 'dialogue' ? splitDialogueLine(line, 80) : [line]);
                 };
 
                 const splitEditedDialogue = async (index) => {
                     const line = scriptLines.value[index];
-                    if (!line || line.type !== 'dialogue' || Array.from(line.text || '').length <= 120) return;
+                    if (!line || line.type !== 'dialogue' || Array.from(line.text || '').length <= 80) return;
                     const { splitDialogueLine } = await unitaleLogicPromise;
-                    const parts = splitDialogueLine(line, 120);
+                    const parts = splitDialogueLine(line, 80);
                     scriptLines.value.splice(index, 1, ...parts);
                     triggerAutoSave();
                 };
@@ -6031,6 +6248,56 @@
                     return !!(libraryItem?.filename || (sfx?.filename && sfx?.scanRoot));
                 };
 
+                // 未匹配音效的手动上传绑定。
+                // 文件同时进入内存 Map + IndexedDB + 音效库，当前 chip 随即从 unmatched 变为 local，
+                // 因而无需跳转到“音效与滤波器”页重复录入名称、路径和文件。
+                const bindUploadedSfx = async (sfx, event) => {
+                    const input = event?.target;
+                    const file = input?.files?.[0];
+                    if (!file || !sfx) {
+                        if (input) input.value = '';
+                        return;
+                    }
+
+                    try {
+                        const safeFilename = String(file.name || 'sound.wav').replace(/[\\/:*?"<>|]/g, '_');
+                        const assetKey = `manual_sfx_${Date.now()}_${safeFilename}`;
+                        localFileMap.value.set(assetKey, file);
+                        await saveAssetToDB(assetKey, file);
+
+                        const { attachManualSfxFile } = await unitaleLogicPromise;
+                        attachManualSfxFile(sfx, file, assetKey);
+
+                        const existingIndex = sfxLibrary.value.findIndex(lib => lib.name === sfx.name);
+                        const libraryItem = {
+                            id: existingIndex >= 0 ? sfxLibrary.value[existingIndex].id : `sfx_${Date.now()}`,
+                            name: sfx.name,
+                            description: `手动绑定：${file.name}`,
+                            filename: assetKey,
+                            source: 'local',
+                            trimStart: 0,
+                            trimEnd: 1,
+                            volume: 0.3,
+                            isAmbient: existingIndex >= 0 ? !!sfxLibrary.value[existingIndex].isAmbient : false,
+                            enabled: true
+                        };
+                        if (existingIndex >= 0) {
+                            sfxLibrary.value.splice(existingIndex, 1, libraryItem);
+                        } else {
+                            sfxLibrary.value.push(libraryItem);
+                        }
+
+                        await loadAudioBuffer(assetKey);
+                        triggerAutoSave();
+                        alert(`已将“${sfx.name}”绑定到文件：${file.name}`);
+                    } catch (error) {
+                        console.error('手动绑定音效失败:', error);
+                        alert(`手动绑定失败：${error.message || error}`);
+                    } finally {
+                        if (input) input.value = '';
+                    }
+                };
+
                 // 工单 C：单条 sfx 重新匹配（chip 上的 🔁 按钮）
                 const retrySingleSfx = async (line, idx) => {
                     const s = line.sfx[idx];
@@ -6056,8 +6323,10 @@
                 const getSfxSourceMeta = (source) => {
                     switch (source) {
                         case 'local': return { emoji: '🌿', cls: 'bg-emerald-50 border-emerald-100 text-emerald-700', label: '本地库' };
+                        case 'local_scan': return { emoji: '📁', cls: 'bg-emerald-50 border-emerald-100 text-emerald-700', label: '本地文件 / 扫描目录' };
                         case 'llm': return { emoji: '🧠', cls: 'bg-violet-50 border-violet-200 text-violet-700', label: 'LLM 兜底' };
                         case 'freesound': return { emoji: '🌐', cls: 'bg-sky-50 border-sky-200 text-sky-700', label: 'Freesound 在线下载' };
+                        case 'freesound_file': return { emoji: '🌐', cls: 'bg-sky-50 border-sky-200 text-sky-700', label: 'Freesound 已下载文件' };
                         case 'unmatched':
                         default: return { emoji: '⚠️', cls: 'bg-amber-50 border-amber-200 text-amber-700', label: '未命中' };
                     }
@@ -6581,6 +6850,36 @@ const generateVideo = async () => {
                         ? `, "sfx": [{"name": "${enabledSfx[0].name}", "position": 0.2}]`
                         : '';
 
+                    // 原文是唯一真源：程序先无损切片，AI 只负责为 segment_id 返回元数据。
+                    // 后续无论模型是否回传/改写 text_content，最终正文都从 sourceSegments 回填。
+                    let logic;
+                    let sourceSegments;
+                    let segmentPayload;
+                    try {
+logic = await unitaleLogicPromise;
+                        const compressedScript = logic.compressChineseWhitespace(rawScript.value);
+                        sourceSegments = logic.createSourceSegments(rawScript.value, 80);
+                        const sourceValidation = logic.validateSourceSegments(compressedScript, sourceSegments);
+                        if (!sourceValidation.ok) {
+                            throw new Error('原文切片完整性校验失败，已停止分析。');
+                        }
+                        segmentPayload = sourceSegments.map(segment => ({
+                        segment_id: segment.id,
+                        source_text: segment.text,
+                        ...(segment.quoteGroupId ? {
+                            quote_group_id: segment.quoteGroupId,
+                            quote_part: segment.quotePart,
+                            quote_part_count: segment.quotePartCount
+                        } : {})
+                        }));
+                    } catch (sourceError) {
+                        isAnalyzingScript.value = false;
+                        analysisAbortController.value = null;
+                        console.error(sourceError);
+                        alert('分析失败: ' + sourceError.message);
+                        return;
+                    }
+
                     const templateToUse = useCustomPrompt.value ? customPromptTemplate.value : defaultPromptTemplate;
                     let finalPrompt = templateToUse
                         .replace(/\${emotionList}/g, emotionList)
@@ -6624,6 +6923,27 @@ const generateVideo = async () => {
                         }
                     }
 
+                    // 放在 Prompt 最后，作为最高优先级输出协议；兼容用户已有自定义 Prompt。
+                    finalPrompt += `
+
+## 最高优先级：原文片段 ID 协议
+程序已将原文无损切成下列片段。你不需要抄写、合并、删减或改写 source_text。
+请为每个 segment_id 严格返回且仅返回一个 type="dialogue" 对象，并原样带回 segment_id。
+对象格式：{"type":"dialogue","segment_id":"seg_0001","role_name":"角色名","emotion":"必须填且选自系统列表","intensity":"强度","break_duration":0,"filter":"可选","sfx":[]}
+要求：
+1. 每个输入 segment_id 必须恰好出现一次，顺序与输入一致；不得遗漏、重复或新增 ID。
+2. 不要返回 text_content/text/content，正文由程序从 source_text 安全回填。
+   **emotion 与 intensity 字段必填**：emotion 必须从 [${emotionList}] 中选一个，**不得返回空字符串、null 或列表外的值**；无法判断时填"平静"。intensity 必须在 [微弱,稍弱,中等,较强,强烈] 中选一个，默认"中等"。
+3. source_text 中引号内通常是角色直接台词；引号外的动作、说话提示和叙述通常归“旁白”。结合相邻片段判断引号内台词的真实说话人。
+   **关键铁则**：不在引号内的片段一律判为“旁白”，无论它是否包含人名或以某人为主语。例如“老李猛地按住了我的手，脸色惨白。”必须 role_name="旁白"，**禁止**标为"老李"；只有引号内台词才需要分配说话人。
+   具有相同 quote_group_id 的片段来自同一段超过 120 字的完整引语，默认必须判给同一角色，除非原文明示引语内部换了说话人。
+4. 如需 BGM/bgImage 控制块，必须增加 before_segment_id，表示插入到哪个原文片段之前；例如 {"type":"bgm","action":"play","name":"BGM名称","before_segment_id":"seg_0001"}。
+5. 最终只输出严格 JSON 数组，不要解释。
+
+片段列表：
+${JSON.stringify(segmentPayload)}
+`;
+
                     try {
                         const cfg = currentConfig.value;
                         let url = cfg.baseUrl.trim().replace(/\/+$/, '');
@@ -6655,37 +6975,156 @@ const generateVideo = async () => {
                         const jsonMatch = content.match(/\[\s*\{[\s\S]*\}\s*\]/);
                         const jsonStr = jsonMatch ? jsonMatch[0] : content.replace(/```json/g, '').replace(/```/g, '').trim();
 
-                        const parsed = JSON.parse(jsonStr);
+                        let parsed = [];
+                        try {
+                            const firstPass = JSON.parse(jsonStr);
+                            if (Array.isArray(firstPass)) parsed = firstPass;
+                        } catch (firstParseError) {
+                            // 截断/畸形首轮不再终止：下面会把所有未收到的 segment_id 自动补分析。
+                            console.warn('首轮 AI JSON 不完整，将自动按原文片段补分析:', firstParseError);
+                        }
                         if (Array.isArray(parsed)) {
-                            const validParsed = parsed;
+                            let metadataItems = parsed.filter(item => item && typeof item === 'object' && (item.type || 'dialogue') === 'dialogue');
+                            let mergeResult = logic.mergeSegmentAnalysis(sourceSegments, metadataItems);
+
+                            // 首轮若模型忽略新协议或漏掉 ID，自动针对缺失片段补分析；不要求用户重新点击。
+                            for (let repairRound = 0; repairRound < 2 && mergeResult.missingSegmentIds.length > 0; repairRound++) {
+                                const missingSet = new Set(mergeResult.missingSegmentIds);
+                                const missingSegments = sourceSegments.filter(segment => missingSet.has(segment.id));
+                                const repairPrompt = `你是小说台词元数据分析器。请根据完整上下文判断下列缺失片段的角色、情绪、强度和音效。\n` +
+                                    `每个 segment_id 必须恰好返回一次；不要返回或改写正文；只输出严格 JSON 数组。\n` +
+                                    `格式：{"type":"dialogue","segment_id":"seg_0001","role_name":"角色名","emotion":"${emotionList.split(',')[0] || '平静'}","intensity":"中等","break_duration":0,"sfx":[]}\n` +
+                                    `完整上下文：${JSON.stringify(segmentPayload)}\n缺失片段：${JSON.stringify(missingSegments)}`;
+                                const repairBody = {
+                                    model: cfg.model,
+                                    messages: [{ role: 'user', content: repairPrompt }],
+                                    stream: false,
+                                    temperature: 0.1
+                                };
+                                try {
+                                    const repairRes = await fetch(url, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` },
+                                        body: JSON.stringify(repairBody),
+                                        signal: analysisAbortController.value.signal
+                                    });
+                                    if (!repairRes.ok) continue;
+                                    const repairData = await repairRes.json();
+                                    const repairContent = repairData.choices[0]?.message?.content || '';
+                                    const repairMatch = repairContent.match(/\[\s*\{[\s\S]*\}\s*\]/);
+                                    const repaired = JSON.parse(repairMatch ? repairMatch[0] : repairContent.replace(/```json|```/g, '').trim());
+                                    if (Array.isArray(repaired)) {
+                                        metadataItems.push(...repaired.filter(item => item && typeof item === 'object'));
+                                    }
+                                } catch (repairParseError) {
+                                    if (repairParseError.name === 'AbortError') throw repairParseError;
+                                    console.warn(`片段补分析第 ${repairRound + 1} 轮解析失败:`, repairParseError);
+                                }
+                                mergeResult = logic.mergeSegmentAnalysis(sourceSegments, metadataItems);
+                            }
+
+                            // 极端情况下模型连续漏 ID：仍将原文完整放入列表，并标为“角色待确认”，绝不丢字。
+                            // 这条降级只影响角色置信度，不影响正文完整性。
+                            if (mergeResult.missingSegmentIds.length > 0) {
+                                mergeResult.missingSegmentIds.forEach(segmentId => {
+                                    metadataItems.push({
+                                        type: 'dialogue',
+                                        segment_id: segmentId,
+                                        role_name: '旁白',
+                                        emotion: '平静',
+                                        intensity: '中等',
+                                        break_duration: 0,
+                                        _roleNeedsReview: true,
+                                        _roleReviewReason: 'AI 连续漏回该片段，正文已从原文安全回填，请确认角色'
+                                    });
+                                });
+                                mergeResult = logic.mergeSegmentAnalysis(sourceSegments, metadataItems);
+                            }
+
+                            // 将原文片段回填为 text_content，供后续既有角色/SFX/BGM 映射流程使用。
+                            // metadata 中模型自行生成的正文在 mergeSegmentAnalysis 内已被无条件忽略。
+                            const canonicalDialogues = mergeResult.lines.map(line => ({
+                                ...line,
+                                type: 'dialogue',
+                                segment_id: line.segmentId,
+                                text_content: line.text
+                            }));
+
+                            // 正文严格采用 canonicalDialogues 的原文顺序，绝不信任 AI 返回数组顺序。
+                            // BGM/bgImage 只有携带有效 before_segment_id 才能按锚点插入，不能扰乱正文。
+                            const controlsByAnchor = new Map();
+                            parsed.filter(item => item && typeof item === 'object' && (item.type || 'dialogue') !== 'dialogue').forEach(item => {
+                                const anchor = String(item.before_segment_id || item.beforeSegmentId || '');
+                                if (!sourceSegments.some(segment => segment.id === anchor)) return;
+                                if (!controlsByAnchor.has(anchor)) controlsByAnchor.set(anchor, []);
+                                controlsByAnchor.get(anchor).push(item);
+                            });
+                            const validParsed = [];
+                            canonicalDialogues.forEach(dialogue => {
+                                validParsed.push(...(controlsByAnchor.get(dialogue.segment_id) || []));
+                                validParsed.push(dialogue);
+                            });
 
                             // 角色名先做确定性清洗，再仅对低置信台词发起局部复核。
-                            const { normalizeRoleName, assessRoleConfidence, normalizeSfxAnnotation } = await unitaleLogicPromise;
+                            const { normalizeRoleName, assessRoleConfidence, extractDialogueText, buildMappedSfxItem, markQuoteRoleConflicts, sanitizeEmotionFields } = logic;
                             const uncertainRoleItems = [];
                             validParsed.forEach((item, itemIndex) => {
                                 if ((item.type || 'dialogue') !== 'dialogue') return;
                                 item.role_name = normalizeRoleName(item.role_name || item.role || '旁白');
                                 const assessment = assessRoleConfidence(item.role_name);
-                                item._roleNeedsReview = assessment.needsReview;
-                                item._roleReviewReason = assessment.reason;
+                                item._roleNeedsReview = !!item._roleNeedsReview || assessment.needsReview;
+                                item._roleReviewReason = item._roleReviewReason || assessment.reason;
                                 if (assessment.needsReview) uncertainRoleItems.push({ item, itemIndex });
                             });
 
                             if (uncertainRoleItems.length > 0) {
                                 try {
-                                    const candidateRoles = [...new Set(validParsed
+                                    // 候选角色集：所有高置信 dialogue 的规范化角色名（去重，排除代词类异常名）
+                                    let candidateRoles = [...new Set(validParsed
                                         .filter(item => (item.type || 'dialogue') === 'dialogue' && !item._roleNeedsReview)
-                                        .map(item => item.role_name))];
+                                        .map(item => item.role_name)
+                                        .filter(name => !PRONOUN_FOR_REVIEW.has(name)))];
+
+                                    // 候选集为空时做兜底：从原文片段里抽取"说话人提示语"推断的角色名，
+                                    // 例如"老李说道"、"小张低声道"、"她笑道"。足以在没有高置信台词时撑起复核。
+                                    if (candidateRoles.length === 0) {
+                                        const cuePattern = /([\u4e00-\u9fa5A-Za-z]{1,8})(?:低声说|沉声说|轻声说|笑道|说 道|说道|喊道|问|问道|喊|答|答道|低声道|沉声道|小声道|笑道说|说)/g;
+                                        const cueRoles = new Set();
+                                        sourceSegments.forEach(seg => {
+                                            let m;
+                                            cuePattern.lastIndex = 0;
+                                            while ((m = cuePattern.exec(seg.text)) !== null) {
+                                                const name = normalizeRoleName(m[1]);
+                                                if (!PRONOUN_FOR_REVIEW.has(name) && name !== '旁白') {
+                                                    cueRoles.add(name);
+                                                }
+                                            }
+                                        });
+                                        candidateRoles = [...cueRoles];
+                                    }
+
+                                    // 取真正的前后"台词"作上下文：跳过 bgm/bgImage 等控制块，避免空串误导复核
+                                    const nearestDialogueText = (fromIndex, dir) => {
+                                        for (let i = fromIndex + dir; i >= 0 && i < validParsed.length; i += dir) {
+                                            const it = validParsed[i];
+                                            if ((it.type || 'dialogue') === 'dialogue') {
+                                                return extractDialogueText(it);
+                                            }
+                                        }
+                                        return '';
+                                    };
                                     const reviewCases = uncertainRoleItems.map(({ item, itemIndex }) => ({
                                         index: itemIndex,
                                         current_role: item.role_name,
-                                        previous: validParsed[itemIndex - 1]?.text_content || '',
-                                        text: item.text_content || item.text || '',
-                                        next: validParsed[itemIndex + 1]?.text_content || ''
+                                        previous: nearestDialogueText(itemIndex, -1),
+                                        text: extractDialogueText(item),
+                                        next: nearestDialogueText(itemIndex, 1)
                                     }));
                                     const reviewPrompt = `你是小说说话人复核器。候选角色：${JSON.stringify(candidateRoles)}。\n` +
-                                        `只复核下列低置信台词，依据说话提示语、连续对话轮次、动作主体和称谓关系判断。` +
-                                        `返回严格 JSON 数组，每项格式 {"index":数字,"role_name":"角色名","confidence":0到1}；无法确认时 confidence 低于0.8。\n` +
+                                        `针对下列每条低置信台词，必须从候选角色中选出最可能的说话人，并给出 0~1 的置信度。` +
+                                        `判断依据（按优先级）：1) 相邻片段的说话提示语（"某某说/问道/喊道"）中的动作主体；2) 连续对话的轮次交替规律；3) 称谓关系（谁对谁说）。` +
+                                        `即使把握不大，也要给出最佳候选角色，不要返回候选集之外的角色名，confidence 可填 0.6~0.7。` +
+                                        `返回严格 JSON 数组，每项格式 {"index":数字,"role_name":"候选角色之一","confidence":0到1}。\n` +
                                         JSON.stringify(reviewCases);
                                     const reviewBody = {
                                         model: cfg.model,
@@ -6708,8 +7147,9 @@ const generateVideo = async () => {
                                             const target = validParsed[result.index];
                                             const reviewedRole = normalizeRoleName(result.role_name);
                                             const reviewedAssessment = assessRoleConfidence(reviewedRole);
-                                            // 复核结果必须属于候选角色集，防止模型凭空新增角色
-                                            if (target && candidateRoles.includes(reviewedRole) && Number(result.confidence) >= 0.8 && !reviewedAssessment.needsReview) {
+                                            // 复核结果必须属于候选角色集，防止模型凭空新增角色；
+                                            // 阈值放宽到 0.6，避免模型保守给 0.7 导致大量台词无法解除待确认。
+                                            if (target && candidateRoles.includes(reviewedRole) && Number(result.confidence) >= 0.6 && !reviewedAssessment.needsReview) {
                                                 target.role_name = reviewedRole;
                                                 target._roleNeedsReview = false;
                                                 target._roleReviewReason = '';
@@ -6721,6 +7161,9 @@ const generateVideo = async () => {
                                     console.warn('低置信角色局部复核失败，将保留待确认标记:', reviewError);
                                 }
                             }
+
+                            // 局部复核结束后检查长引语组：保留各片段原角色，只把冲突组整体标为待确认。
+                            markQuoteRoleConflicts(validParsed);
 
                             const newRoles = new Set();
                             validParsed.forEach(item => {
@@ -6785,22 +7228,8 @@ const generateVideo = async () => {
 
                                 // 2. 匹配音效（仅做本地字符串匹配，未命中的名称保留为 unmatchedSfx 用于后续兜底处理）
                                 let matchedSfx = [];
-                                let unmatchedSfxNames = [];
                                 if (item.sfx && Array.isArray(item.sfx)) {
-                                    matchedSfx = item.sfx.map(normalizeSfxAnnotation).filter(Boolean).map(s => {
-                                        const matched = findBestMatch(s.name, sfxLibrary.value);
-                                        if (!matched) unmatchedSfxNames.push(s.name);
-                                        return {
-                                            name: matched || s.name,
-                                            position: s.position,
-                                            // source: 'local'（本地命中）/ 'unmatched'（未命中，待兜底）。
-                                            // 兜底成功后由 runUnmatchedSfxWorkflow 回写为 'llm' 或 'freesound'
-                                            source: matched ? 'local' : 'unmatched',
-                                            // lastQuery 保留原始名，供"重新匹配"按钮复用
-                                            lastQuery: s.name,
-                                            unmatchedHint: !matched ? s.name : null
-                                        };
-                                    });
+                                    matchedSfx = item.sfx.map(s => buildMappedSfxItem(s, sfxLibrary.value)).filter(Boolean);
                                 }
 
                                 // 3. 匹配 BGM
@@ -6819,9 +7248,10 @@ const generateVideo = async () => {
                                      role: item.role_name || item.role || '旁白',
                                      roleNeedsReview: !!item._roleNeedsReview,
                                      roleReviewReason: item._roleReviewReason || '',
-                                    text: item.text_content || item.text || item.content || '',
-                                    emotion: item.emotion || '平静',
-                                    intensity: item.intensity || '中等',
+                                    // 关键不变量：canonicalDialogues 已从原文片段回填正文，
+                                    // extractDialogueText 只负责读取该规范化字段，不接受模型改写正文。
+                                    text: item.type === 'dialogue' && typeof item.text_content === 'string' ? item.text_content : '',
+                                    ...sanitizeEmotionFields(item.emotion, item.intensity),
                                     filter: matchedFilter,
                                     sfx: matchedSfx,
                                     break_duration: typeof item.break_duration === 'number' ? item.break_duration : 0,
@@ -6843,6 +7273,7 @@ const generateVideo = async () => {
                                 };
                             });
                             scriptLines.value = await normalizeDialogueLines(mappedLines);
+                            // textarea 自适应已由 watch(scriptLines) 统一处理
 
                             // Phase 6：未命中音效的统一弹窗确认 + 一次性自动兜底
                             // 收集所有未命中的音效名称（去重）。source==='unmatched' 已在分析阶段写入。
@@ -7177,6 +7608,7 @@ const generateVideo = async () => {
                     freesoundToken, showFreesoundToken, freesoundEnabled, freesoundAutoImport, saveFreesoundConfig,
                     llmFallbackMatch, fetchFreesoundSfx, confirmSfxReplace,
                     resolveUnmatchedSfx, runUnmatchedSfxWorkflow, retryAllUnmatchedSfx,
+                    downloadUnmatchedSfxList,
                     // Phase 3/4：本地音效文件夹扫描
                     sfxScanRootPath, sfxScanRootExists, sfxScanRootStatus, isScanningLocal, scannedSfxItems, sfxSaveDir,
                     setSfxScanRoot, getSfxScanRoot, scanLocalSfx, importScannedSfx, importSingleScannedSfx, clearScannedSfx,
@@ -7188,6 +7620,7 @@ const generateVideo = async () => {
                     // Timbre Actions
                     timbres, timbreForm, isEditingTimbre, selectedTimbreId,
                     saveTimbre, editTimbre, deleteTimbre, resetTimbreForm, handleTimbreFileUpload,
+                    syncTimbresWithServer,
 
                     // Emotion Actions
                     emotionPresets, emotionForm, isEditingEmotion,
@@ -7198,7 +7631,7 @@ const generateVideo = async () => {
                     sfxLibrary, sfxForm, isEditingSfx,
                     saveSfx, editSfx, deleteSfx, resetSfxForm, handleSfxFileUpload,
                     addLineSfx, removeLineSfx,
-                    retrySingleSfx, getSfxSourceMeta,
+                    retrySingleSfx, bindUploadedSfx, getSfxSourceMeta,
                     unmatchedSfxCount,
 
                     // BGM Actions

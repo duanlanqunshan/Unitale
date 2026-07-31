@@ -71,3 +71,10 @@ Unitale Basic Project for EN.json
 鎴浘/
 *.min.css
 *.min.js
+
+# === 临时音色生成物（不应进版本库）===
+timbres/*.wav
+timbres/*.mp3
+
+repro_input.txt
+
