@@ -1902,6 +1902,15 @@
 
                 watch(activeTab, (newValue) => {
                     localStorage.setItem('storyforge_activeTab', newValue);
+                    // ★ 切回 script 页时 v-if 重新挂载 textarea，
+                    // 初始 scrollHeight 会塌缩为 1 行，需 nextTick 后重置高度
+                    if (newValue === 'script') {
+                        nextTick(() => {
+                            if (typeof resizeAllTextareas === 'function') {
+                                resizeAllTextareas().catch(() => {});
+                            }
+                        });
+                    }
                 });
                 const llmConfigs = ref([]);
                 const currentConfigId = ref('');
