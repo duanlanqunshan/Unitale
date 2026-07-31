@@ -3035,19 +3035,27 @@
                              }, 100); // Small delay to let UI render first
  
                          }
-                      } catch (e) {
-                          console.error('Failed to restore from IndexedDB', e);
-                      } finally {
-                          // Slightly longer delay to ensure background loading has started
-                          setTimeout(() => { isRestoring.value = false; }, 500);
-                          // 后台异步把音色 precinct 同步到 TTS 后端，避免合成时报"音频不存在"。
-                          // 不阻塞 UI 失败也不影响主流程，仅在 console 留痕。
-                          setTimeout(() => {
-                              if (typeof syncTimbresWithServer === 'function' && currentTtsConfig.value) {
-                                  syncTimbresWithServer().catch(err => console.warn('启动时自动同步音色到 TTS 后端失败:', err));
-                              }
-                          }, 2000);
-                      }
+                       } catch (e) {
+                           console.error('Failed to restore from IndexedDB', e);
+                       } finally {
+                           // Slightly longer delay to ensure background loading has started
+                           setTimeout(() => { isRestoring.value = false; }, 500);
+                           // 后台异步把音色 precinct 同步到 TTS 后端，避免合成时报"音频不存在"。
+                           // 不阻塞 UI 失败也不影响主流程，仅在 console 留痕。
+                           setTimeout(() => {
+                               if (typeof syncTimbresWithServer === 'function' && currentTtsConfig.value) {
+                                   syncTimbresWithServer().catch(err => console.warn('启动时自动同步音色到 TTS 后端失败:', err));
+                               }
+                           }, 2000);
+                           // ★ 修复：刷新后 sfxScanRootPath 为空，导致 sfxLibrary 中 scanRoot 缺失的本地扫描条目
+                           // 在导出时 resolveSfxPlaybackUrl 转译不出带 root_path 的 URL，本地音效全部静默。
+                           // onMounted 时主动从后端拉取扫描根目录，填充到 sfxScanRootPath（也顺便让 UI 正确显示）。
+                           setTimeout(() => {
+                               if (typeof getSfxScanRoot === 'function') {
+                                   getSfxScanRoot().catch(err => console.warn('启动时拉取 sfx 扫描根目录失败:', err));
+                               }
+                           }, 500);
+                       }
                 });
 
                 const currentTtsConfig = computed(() => {
@@ -5531,12 +5539,43 @@
                         }
 
                         // 2. 加载用到的音效
-                        const usedSfxNames = new Set();
-                        scriptLines.value.forEach(l => { if (l.sfx) l.sfx.forEach(s => usedSfxNames.add(s.name)); });
-                        for (const name of usedSfxNames) {
-                            const item = sfxLibrary.value.find(s => s.name === name);
-                            if (item && item.filename) {
-                                try { assets.sfx[name] = await loadAudioBuffer(item.filename); } catch (e) { }
+                        // 关键修复：本地扫描音效的 filename 是相对路径（如 doors/metal_hit.wav），
+                        // 需要 resolveSfxPlaybackUrl 把它转译为 /v1/sfx/local_file?... 后端 API URL；
+                        // 不匹配库条目时，回退到脚本 sfx 项上存留的 filename/source/scanRoot 自描述字段。
+                        const { resolveSfxPlaybackUrl } = await unitaleLogicPromise;
+                        const usedSfx = []; // { name, filename, source, scanRoot }
+                        scriptLines.value.forEach(l => {
+                            if (l.sfx) l.sfx.forEach(s => {
+                                if (usedSfx.some(u => u.name === s.name)) return;
+                                const libHit = sfxLibrary.value.find(lib => lib.name === s.name);
+                                if (libHit) {
+                                    usedSfx.push({ name: s.name, filename: libHit.filename, source: libHit.source, scanRoot: libHit.scanRoot, isAmbient: libHit.isAmbient });
+                                } else {
+                                    // 库中无同名条目，尝试从 sfx 对象自身上找备用字段（如 attachManualSfxFile 写入的）
+                                    if (s.filename) {
+                                        usedSfx.push({ name: s.name, filename: s.filename, source: s.source, scanRoot: s.scanRoot, isAmbient: s.isAmbient });
+                                    } else {
+                                        console.warn(`[exportSfx] sfxLibrary 找不到条目且无备选字段，将跳过：${s.name}`);
+                                    }
+                                }
+                            });
+                        });
+                        for (const entry of usedSfx) {
+                            const { name, filename, source } = entry;
+                            if (!filename) continue;
+                            // ★ entry.scanRoot 优先，缺失时回退到全局 sfxScanRootPath（onMounted 已自动从后端拉取）
+                            const scanRoot = entry.scanRoot || sfxScanRootPath.value || '';
+                            try {
+                                // resolveSfxPlaybackUrl 需要对象形式 item={filename, source, scanRoot}
+                                const playbackUrl = resolveSfxPlaybackUrl({ filename, source, scanRoot }) || filename;
+                                const buf = await loadAudioBuffer(playbackUrl);
+                                if (buf) {
+                                    assets.sfx[name] = buf;
+                                } else {
+                                    console.warn(`[exportSfx] 加载音效失败（返回空 buffer）：${name} filename=${filename} url=${playbackUrl} scanRoot=${scanRoot}`);
+                                }
+                            } catch (e) {
+                                console.warn(`[exportSfx] 加载音效异常：${name}`, e);
                             }
                         }
 
@@ -5587,203 +5626,109 @@
                         }
                         if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + EXPORT_TAIL_PADDING_SEC });
 
-                        // 5. 离线渲染
+                        // 5. 离线渲染 —— 仅生成纯语音轨 + 纯音效轨（不再生成主混音）
                         const totalDuration = currentTime + EXPORT_TAIL_PADDING_SEC;
-                        const offlineCtx = new OfflineAudioContext(2, totalDuration * 44100, 44100);
-
-                        // 调度 BGM
-                        bgmSegments.forEach(seg => {
-                            const buffer = assets.bgm[seg.name];
-                            if (buffer) {
-                                const libItem = bgmLibrary.value.find(b => b.name === seg.name);
-                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
-                                const finalVol = seg.volume * libVol;
-
-                                const src = offlineCtx.createBufferSource();
-                                src.buffer = buffer;
-                                src.loop = true;
-                                const trimStart = libItem?.trimStart ?? 0;
-                                const trimEnd = libItem?.trimEnd ?? 1;
-                                src.loopStart = buffer.duration * trimStart;
-                                src.loopEnd = buffer.duration * trimEnd;
-
-                                const gain = offlineCtx.createGain();
-                                gain.gain.setValueAtTime(0, seg.start);
-                                gain.gain.linearRampToValueAtTime(finalVol, seg.start + 2);
-                                gain.gain.setValueAtTime(finalVol, Math.max(seg.start + 2, seg.end - 2));
-                                gain.gain.linearRampToValueAtTime(0, seg.end);
-                                src.connect(gain).connect(offlineCtx.destination);
-                                src.start(seg.start, src.loopStart); // Start from loop start
-                                src.stop(seg.end);
-                            }
-                        });
-
-                        // 调度台词和音效
-                        events.forEach(evt => {
-                            const dSrc = offlineCtx.createBufferSource();
-                            dSrc.buffer = evt.buffer;
-                            const dGain = offlineCtx.createGain();
-                            const char = characters.value.find(c => c.name === evt.line.role);
-                            const charVol = char ? (char.volume ?? 1.0) : 1.0;
-                            dGain.gain.value = (evt.line.dialogueVolume ?? 1.0) * charVol;
-
-                            let lastNode = dSrc;
-                            // 应用滤镜
-                            if (evt.line.filter) {
-                                const fConfig = filterLibrary.value.find(f => f.name === evt.line.filter);
-                                if (fConfig) {
-                                    if (fConfig.type === 'distortion') {
-                                        const ws = offlineCtx.createWaveShaper();
-                                        ws.curve = makeDistortionCurve(fConfig.gain);
-                                        ws.oversample = '4x';
-                                        lastNode.connect(ws);
-                                        lastNode = ws;
-                                    } else {
-                                        const bq = offlineCtx.createBiquadFilter();
-                                        bq.type = fConfig.type;
-                                        bq.frequency.value = fConfig.frequency;
-                                        bq.Q.value = fConfig.Q;
-                                        lastNode.connect(bq);
-                                        lastNode = bq;
-                                    }
-                                }
-                            }
-                            lastNode.connect(dGain).connect(offlineCtx.destination);
-                            dSrc.start(evt.time, 0, Math.min(evt.buffer.duration, evt.duration));
-
-                            // 调度音效（瞬时 + 环境持续音 Ambient）
-                            if (evt.line.sfx) {
-                                evt.line.sfx.forEach(s => {
-                                    const sBuffer = assets.sfx[s.name];
-                                    const libItem = sfxLibrary.value.find(l => l.name === s.name);
-                                    const isAmbient = libItem?.isAmbient ?? false;
-                                    if (sBuffer) {
-                                        if (isAmbient) {
-                                            // 环境持续音：淡入铺底整个台词时长，淡出
-                                            const sGain = offlineCtx.createGain();
-                                            const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
-                                            const scriptVol = evt.line.sfxVolume ?? 0.5;
-                                            const finalAmbientVol = scriptVol * libVol * 0.7; // 持续音略低
-                                            const fadeInDur = 0.5;
-                                            const fadeOutDur = 0.5;
-                                            const ambientStart = evt.time;
-                                            const ambientEnd = evt.time + evt.duration + fadeOutDur;
-
-                                            sGain.gain.setValueAtTime(0, ambientStart);
-                                            sGain.gain.linearRampToValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
-                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
-                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientEnd - fadeOutDur);
-                                            sGain.gain.linearRampToValueAtTime(0, ambientEnd);
-
-                                            const sSrc = offlineCtx.createBufferSource();
-                                            sSrc.buffer = sBuffer;
-                                            const sTrimStart = libItem?.trimStart ?? 0;
-                                            const sOffset = sBuffer.duration * sTrimStart;
-                                            // 持续播放足够长（台词时长 + 淡出缓冲）
-                                            const sDuration = Math.max(sBuffer.duration * 0.5, evt.duration + fadeOutDur);
-                                            sSrc.connect(sGain).connect(offlineCtx.destination);
-                                            sSrc.start(ambientStart, sOffset, sDuration);
-                                        } else {
-                                            // 瞬时音效：根据 item.position 在指定时间点触发
-                                            const pos = parseFloat(s.position) || 0;
-                                            const clampedPos = Math.max(0, Math.min(1, pos));
-                                            const sfxTime = evt.time + (evt.duration * clampedPos);
-                                            if (Number.isFinite(sfxTime)) {
-                                                const sSrc = offlineCtx.createBufferSource();
-                                                sSrc.buffer = sBuffer;
-                                                const sGain = offlineCtx.createGain();
-                                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
-                                                const scriptVol = evt.line.sfxVolume ?? 0.5;
-                                                sGain.gain.value = scriptVol * libVol;
-
-                                                const sTrimStart = libItem?.trimStart ?? 0;
-                                                const sTrimEnd = libItem?.trimEnd ?? 1;
-                                                const sOffset = sBuffer.duration * sTrimStart;
-                                                const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
-
-                                                sSrc.connect(sGain).connect(offlineCtx.destination);
-                                                sSrc.start(sfxTime, sOffset, sDuration);
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                        });
+                        // 采样率与浏览器主 AudioContext 保持一致，避免渲染后音高/速度偏移。
+                        const EXPORT_SAMPLE_RATE = audioContext.sampleRate || 44100;
 
                         // --- 升级：分轨导出（语音轨 dialogue_track.wav + 音效轨 sfx_track.wav + 时间线元数据 JSON） ---
                         exportStatus.value = '正在渲染纯语音轨 (Dialogue Stem)...';
                         await new Promise(r => requestAnimationFrame(r));
 
-                        // 1. 渲染纯语音轨
-                        const offlineCtxDialogue = new OfflineAudioContext(1, sampleRate * totalDuration, sampleRate);
-                        for (const line of dialogueLines) {
-                            const buffer = assets.processedDialogues[line.id];
-                            const timing = assets.dialogueTimings[line.id];
-                            if (!buffer || !timing) continue;
+                        // 1) 语音轨：完全复用主时间轴 evt.time / evt.duration / evt.buffer，
+                        //    逐行安排 src.start(time, 0, duration)，按主混音相同节奏播放。
+                        const offlineCtxDialogue = new OfflineAudioContext(1, Math.ceil(EXPORT_SAMPLE_RATE * totalDuration), EXPORT_SAMPLE_RATE);
+                        events.forEach(evt => {
+                            if (evt.type !== 'dialogue') return;
+                            const buffer = evt.buffer;
+                            if (!buffer) return;
+                            const line = evt.line;
                             const src = offlineCtxDialogue.createBufferSource();
                             src.buffer = buffer;
                             const gain = offlineCtxDialogue.createGain();
-                            gain.gain.value = line.dialogueVolume ?? 1.0;
+                            const charRef = characters.value.find(c => c.name === line.role);
+                            const charVol = charRef ? (charRef.volume ?? 1.0) : 1.0;
+                            gain.gain.value = (line.dialogueVolume ?? 1.0) * charVol;
                             src.connect(gain).connect(offlineCtxDialogue.destination);
-                            src.start(timing.startTime);
-                        }
+                            // start(time, offset, duration) —— 与主混音 line 5652 完全一致
+                            src.start(evt.time, 0, Math.min(buffer.duration, evt.duration));
+                        });
                         const renderedDialogueBuf = await offlineCtxDialogue.startRendering();
                         const dialogueWavBlob = bufferToWave(renderedDialogueBuf, renderedDialogueBuf.length);
 
-                        // 2. 渲染纯音效轨（瞬时音效 + Ambient 持续音）
+                        // 2) 音效轨：完全复用主时间轴 evt.time / evt.duration，瞬时音效 + Ambient 同主混音
                         exportStatus.value = '正在渲染纯音效轨 (SFX & Ambient Stem)...';
                         await new Promise(r => requestAnimationFrame(r));
 
-                        const offlineCtxSfx = new OfflineAudioContext(1, sampleRate * totalDuration, sampleRate);
+                        const offlineCtxSfx = new OfflineAudioContext(1, Math.ceil(EXPORT_SAMPLE_RATE * totalDuration), EXPORT_SAMPLE_RATE);
+                        // 诊断：导出音效前打印音效可用性、events 数量、sfx 配置
+                        console.log('[exportSfx] assets.sfx keys:', Object.keys(assets.sfx));
+                        console.log('[exportSfx] events 数:', events.length);
+                        events.forEach((evt, i) => {
+                            const sfxArr = evt.line?.sfx || [];
+                            sfxArr.forEach((s, j) => {
+                                const buf = assets.sfx[s.name];
+                                console.log(`[exportSfx] evt#${i} time=${evt.time}s dur=${evt.duration}s 越界? ${s.name} buf=${buf ? `OK len=${buf.duration}s ch=${buf.numberOfChannels}` : 'NULL'} pos=${s.position}`);
+                            });
+                        });
                         events.forEach(evt => {
-                            if (evt.type === 'dialogue' && evt.sfx && evt.sfx.length > 0) {
-                                evt.sfx.forEach(sfxItem => {
-                                    const sBuffer = assets.sfx[sfxItem.name];
-                                    if (sBuffer) {
-                                        const libItem = sfxLibrary.value.find(s => s.name === sfxItem.name);
-                                        const isAmbient = libItem?.isAmbient ?? false;
-                                        const sfxTime = evt.startTime + (sfxItem.position * evt.duration);
+                            if (evt.type !== 'dialogue' || !evt.line.sfx || evt.line.sfx.length === 0) return;
+                            evt.line.sfx.forEach(s => {
+                                const sBuffer = assets.sfx[s.name];
+                                if (!sBuffer) return;
+                                const libItem = sfxLibrary.value.find(l => l.name === s.name);
+                                const isAmbient = libItem?.isAmbient ?? false;
+                                const libVol = libItem ? (libItem.volume ?? 1.0) : 1.0;
+                                const scriptVol = evt.line.sfxVolume ?? 0.5;
 
-                                        if (isAmbient) {
-                                            // 持续音铺底整个台词时长
-                                            const sSrc = offlineCtxSfx.createBufferSource();
-                                            sSrc.buffer = sBuffer;
-                                            const sGain = offlineCtxSfx.createGain();
-                                            const fadeInDur = 0.5;
-                                            const fadeOutDur = 0.5;
-                                            const finalAmbientVol = (evt.line.sfxVolume ?? 0.5) * (libItem?.volume ?? 1.0) * 0.7;
+                                if (isAmbient) {
+                                    // 持续音：铺底整个台词时长 + 淡出缓冲，节奏与主混音 5663-5685 一致
+                                    const sGain = offlineCtxSfx.createGain();
+                                    const fadeInDur = 0.5;
+                                    const fadeOutDur = 0.5;
+                                    const finalAmbientVol = scriptVol * libVol * 0.7;
+                                    const ambientStart = evt.time;
+                                    const ambientEnd = evt.time + evt.duration + fadeOutDur;
 
-                                            sGain.gain.setValueAtTime(0, evt.startTime);
-                                            sGain.gain.linearRampToValueAtTime(finalAmbientVol, evt.startTime + fadeInDur);
-                                            const ambientEnd = evt.startTime + evt.duration + fadeOutDur;
-                                            sGain.gain.setValueAtTime(finalAmbientVol, ambientEnd - fadeOutDur);
-                                            sGain.gain.linearRampToValueAtTime(0, ambientEnd);
+                                    sGain.gain.setValueAtTime(0, ambientStart);
+                                    sGain.gain.linearRampToValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
+                                    sGain.gain.setValueAtTime(finalAmbientVol, ambientStart + fadeInDur);
+                                    sGain.gain.setValueAtTime(finalAmbientVol, ambientEnd - fadeOutDur);
+                                    sGain.gain.linearRampToValueAtTime(0, ambientEnd);
 
-                                            sSrc.connect(sGain).connect(offlineCtxSfx.destination);
-                                            sSrc.start(evt.startTime, 0, Math.min(sBuffer.duration, evt.duration + fadeOutDur));
-                                        } else {
-                                            // 瞬时音效
-                                            const sSrc = offlineCtxSfx.createBufferSource();
-                                            sSrc.buffer = sBuffer;
-                                            const sGain = offlineCtxSfx.createGain();
-                                            sGain.gain.value = (evt.line.sfxVolume ?? 0.5) * (libItem?.volume ?? 1.0);
+                                    const sSrc = offlineCtxSfx.createBufferSource();
+                                    sSrc.buffer = sBuffer;
+                                    const sTrimStart = libItem?.trimStart ?? 0;
+                                    const sOffset = sBuffer.duration * sTrimStart;
+                                    const sDuration = Math.max(sBuffer.duration * 0.5, evt.duration + fadeOutDur);
+                                    sSrc.connect(sGain).connect(offlineCtxSfx.destination);
+                                    sSrc.start(ambientStart, sOffset, sDuration);
+                                } else {
+                                    // 瞬时音效：按 s.position 在台词中点触发，与主混音 5687-5705 一致
+                                    const pos = parseFloat(s.position) || 0;
+                                    const clampedPos = Math.max(0, Math.min(1, pos));
+                                    const sfxTime = evt.time + (evt.duration * clampedPos);
+                                    if (!Number.isFinite(sfxTime)) return;
 
-                                            const sTrimStart = libItem?.trimStart ?? 0;
-                                            const sTrimEnd = libItem?.trimEnd ?? 1;
-                                            const sOffset = sBuffer.duration * sTrimStart;
-                                            const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
+                                    const sSrc = offlineCtxSfx.createBufferSource();
+                                    sSrc.buffer = sBuffer;
+                                    const sGain = offlineCtxSfx.createGain();
+                                    sGain.gain.value = scriptVol * libVol;
 
-                                            sSrc.connect(sGain).connect(offlineCtxSfx.destination);
-                                            sSrc.start(sfxTime, sOffset, sDuration);
-                                        }
-                                    }
-                                });
-                            }
+                                    const sTrimStart = libItem?.trimStart ?? 0;
+                                    const sTrimEnd = libItem?.trimEnd ?? 1;
+                                    const sOffset = sBuffer.duration * sTrimStart;
+                                    const sDuration = sBuffer.duration * (sTrimEnd - sTrimStart);
+
+                                    sSrc.connect(sGain).connect(offlineCtxSfx.destination);
+                                    sSrc.start(sfxTime, sOffset, sDuration);
+                                }
+                            });
                         });
                         const renderedSfxBuf = await offlineCtxSfx.startRendering();
                         const sfxWavBlob = bufferToWave(renderedSfxBuf, renderedSfxBuf.length);
 
-                        // 3. 构造时间线元数据 JSON（严格对齐的时间轴信息，方便导入剪映/PR）
+                        // 3) 时间线元数据 JSON
                         exportStatus.value = '打包并导出分轨文件...';
                         await new Promise(r => requestAnimationFrame(r));
 
@@ -5791,19 +5736,19 @@
                             version: '1.5',
                             exportedAt: new Date().toISOString(),
                             totalDuration: totalDuration,
-                            sampleRate: sampleRate,
+                            sampleRate: EXPORT_SAMPLE_RATE,
                             tracks: {
                                 dialogue: 'dialogue_track.wav',
                                 sfx: 'sfx_track.wav'
                             },
                             events: events.map(e => ({
-                                id: e.id,
+                                id: e.line?.id,
                                 type: e.type,
-                                role: e.role,
-                                text: e.text,
-                                startTime: e.startTime,
+                                role: e.line?.role,
+                                text: e.line?.text,
+                                startTime: e.time,
                                 duration: e.duration,
-                                sfx: e.sfx || []
+                                sfx: e.line?.sfx || []
                             }))
                         };
 
@@ -6013,7 +5958,10 @@
                     while (pos < len) {
                         for (i = 0; i < numOfChan; i++) {
                             sample = Math.max(-1, Math.min(1, channels[i][pos]));
-                            sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767) | 0;
+                            // 修复：原写法 `(0.5 + sample < 0 ? ...)` 因运算优先级被解析为
+                            // `((0.5 + sample) < 0)`，导致几乎永远走正数分支、负数样本被严重失真，
+                            // 导出的 WAV 听起来嘈杂、变快、几乎听不清。改为正确的16位 PCM 有符号量化。
+                            sample = (sample < 0 ? sample * 32768 : sample * 32767) | 0;
                             view.setInt16(offset, sample, true);
                             offset += 2;
                         }
