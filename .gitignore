@@ -88,3 +88,8 @@ repro_input.txt
 *.export.mp3
 orig_export*
 
+# === 备份文件不上传 ===
+*.备份.md
+api.py备份.md
+*备份*
+
