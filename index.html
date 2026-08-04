@@ -50,6 +50,16 @@
     </script>
     <script src="./vendor/ffmpeg/ffmpeg.js"></script>
     <script src="./vendor/ffmpeg/util.js"></script>
+    <!-- JSZip：逐句原始 TTS ZIP 导出所需。多级回退 cdn.jsdelivr → unpkg → vendor 本地。 -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script>
+        if (typeof JSZip === 'undefined') {
+            document.write('<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"><\/script>');
+        }
+        if (typeof JSZip === 'undefined') {
+            document.write('<script src="vendor/jszip/jszip.min.js"><\/script>');
+        }
+    </script>
     <style>
         .thinking {
             color: #6b7280;
@@ -161,6 +171,10 @@
                 <button @click="exportSRT" :disabled="isExportingAudio"
                     class="px-3 py-1.5 bg-teal-100 text-teal-700 rounded-lg text-xs font-bold hover:bg-teal-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
                     导出SRT字幕
+                </button>
+                <button @click="exportRawTtsZip" :disabled="isExportingRawTts"
+                    class="px-3 py-1.5 bg-cyan-100 text-cyan-700 rounded-lg text-xs font-bold hover:bg-cyan-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
+                    {{ isExportingRawTts ? (rawTtsExportStatus || '⏳ 打包中...') : '导出逐句原始TTS' }}
                 </button>
                 <button @click="exportAudio" :disabled="isExportingAudio"
                     class="px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-200 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait">
@@ -2135,6 +2149,8 @@
                 });
                 let sequenceAbortController = null;
                 const isExportingAudio = ref(false);
+                const isExportingRawTts = ref(false);
+                const rawTtsExportStatus = ref('');
                 const importFileRef = ref(null);
                 const importTxtRef = ref(null);
                 const isExportingProject = ref(false);
@@ -5573,6 +5589,95 @@
                     event.target.value = '';
                 };
 
+                // --- 导出逐句原始 TTS（ZIP）---
+                // 把每句台词已经合成好的原始 TTS 音频（无滤波/无音效/无 BGM/无音量调整）
+                // 逐句打包成 ZIP 下载。文件名规则：角色名_三位编号.wav
+                // 编号取台词在 scriptLines.value 中的索引+1（用户确认：即"台词列表序号"）。
+                // 旁白台词也参与导出。音频获取优先级：line.audioUrl → IndexedDB line_audio_${line.id}。
+                const exportRawTtsZip = async () => {
+                    if (typeof JSZip === 'undefined') {
+                        alert('JSZip 未加载，无法打包 ZIP。请检查网络或 vendor/jszip/jszip.min.js 是否存在。');
+                        return;
+                    }
+                    const dialogueLines = scriptLines.value.filter(l => l.type === 'dialogue' || !l.type);
+                    if (dialogueLines.length === 0) {
+                        alert('脚本中没有台词，无需导出');
+                        return;
+                    }
+
+                    isExportingRawTts.value = true;
+                    rawTtsExportStatus.value = '正在准备台词列表...';
+                    try {
+                        const zip = new JSZip();
+                        // 收集每句台词的编号（基于在 scriptLines.value 中的原始索引+1）
+                        const tasks = [];
+                        scriptLines.value.forEach((line, idx) => {
+                            const lineType = line.type || 'dialogue';
+                            if (lineType !== 'dialogue') return; // 跳过 bgm/bgImage
+                            tasks.push({ line, lineNo: idx + 1 });
+                        });
+
+                        let okCount = 0;
+                        let missCount = 0;
+                        const missNos = [];
+
+                        for (let i = 0; i < tasks.length; i++) {
+                            const { line, lineNo } = tasks[i];
+                            rawTtsExportStatus.value = `正在拉取台词 ${lineNo}/${tasks.length} 的原始音频...`;
+                            let blob = null;
+                            if (line.audioUrl) {
+                                try {
+                                    const res = await fetch(line.audioUrl);
+                                    if (res.ok) blob = await res.blob();
+                                } catch (e) {}
+                            }
+                            if (!blob) {
+                                try {
+                                    blob = await loadAssetFromDB(`line_audio_${line.id}`);
+                                } catch (e) {}
+                            }
+                            if (!blob) {
+                                missCount++;
+                                missNos.push(lineNo);
+                                continue;
+                            }
+                            const safeRole = (line.role || line.role_name || '角色')
+                                .replace(/[\/\\?%*:|"<>]/g, '_').trim() || '角色';
+                            const idx3 = String(lineNo).padStart(3, '0');
+                            const filename = `${safeRole}_${idx3}.wav`;
+                            zip.file(filename, blob);
+                            okCount++;
+                        }
+
+                        rawTtsExportStatus.value = '正在压缩 ZIP...';
+                        const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+                        const now = new Date();
+                        const pad = n => String(n).padStart(2, '0');
+                        const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+                        const filenameStr = `逐句原始TTS_${stamp}.zip`;
+                        const url = URL.createObjectURL(zipBlob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filenameStr;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        if (missCount > 0) {
+                            const sample = missNos.slice(0, 10).join(', ');
+                            const tail = missNos.length > 10 ? ` 等 ${missCount} 条` : '';
+                            alert(`导出完成：成功 ${okCount} 条，未生成音频跳过 ${missCount} 条（台词 #${sample}${tail}）。未生成音频请先到配音页执行合成。`);
+                        }
+                    } catch (e) {
+                        console.error('exportRawTtsZip error:', e);
+                        alert('导出逐句原始 TTS 失败：' + (e && e.message ? e.message : e));
+                    } finally {
+                        isExportingRawTts.value = false;
+                        rawTtsExportStatus.value = '';
+                    }
+                };
+
                 // --- 导出音频逻辑 (WAV) ---
                 const exportAudio = async () => {
                     const dialogueLines = scriptLines.value.filter(l => l.type === 'dialogue');
@@ -7667,6 +7772,7 @@ ${JSON.stringify(segmentPayload)}
                     toggleLineSelection,
                     openBgImagePicker, handleBgImageFileChange, copyBgImagePrompt, openImagePreview, closeImagePreview,
                     exportScriptState, triggerImport, handleImportFile, importFileRef, exportAudio, isExportingAudio,
+                    exportRawTtsZip, isExportingRawTts, rawTtsExportStatus,
                     exportSRT, triggerImportTxt, handleImportTxt, importTxtRef,
                     isExportingProject, exportStatus, videoResolution,
                     playScriptSequentially, stopScriptSequentially, isSequencePlaying, currentSequenceIndex,
