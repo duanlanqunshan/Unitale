@@ -17,7 +17,8 @@ import {
   markQuoteRoleConflicts,
   validateSourceSegments,
   compressChineseWhitespace,
-  sanitizeEmotionFields
+  sanitizeEmotionFields,
+  buildUnmatchedSfxListText
 } from '../unitale_logic.mjs';
 
 test('LLM 音效标注会规范名称与位置并拒绝非法项', () => {
@@ -645,4 +646,59 @@ test('splitDialogueLine 拆分时保留每个音效的 duration 和定位字段'
     assert.ok(s.start_time === null || typeof s.start_time === 'number');
     assert.ok(['estimated', 'audio_aligned', 'manual'].includes(s.position_source));
   });
+});
+
+// ============================================================
+// 工单 B —— 未匹配音效清单纯文本生成
+// ============================================================
+
+test('buildUnmatchedSfxListText 按每个台词位置输出建议时长和锚点信息', () => {
+  const lines = [
+    { sfx: [{ name: '木门_猛然推开', source: 'unmatched', unmatchedHint: '木门_猛然推开', position: 0.55, duration: 1.2, anchor_text: '猛地推开了门', anchor_mode: 'start' }] },
+    { sfx: [{ name: '暴雨_屋外_持续', source: 'unmatched', unmatchedHint: '暴雨_屋外_持续', position: 0.0, duration: 8, anchor_text: '暴雨声', anchor_mode: 'start' }] }
+  ];
+  const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
+  assert.ok(text.includes('木门_猛然推开'));
+  assert.ok(text.includes('#1'));
+  assert.ok(text.includes('猛地推开了门'));
+  assert.ok(text.includes('1.20'));
+  assert.ok(text.includes('暴雨_屋外_持续'));
+  assert.ok(text.includes('8.00'));
+});
+
+test('buildUnmatchedSfxListText 同名音效在多句台词中分别保留各自 duration', () => {
+  const lines = [
+    { sfx: [{ name: '脚步声', source: 'unmatched', unmatchedHint: '脚步声', position: 0.1, duration: 3.0 }] },
+    { sfx: [{ name: '脚步声', source: 'unmatched', unmatchedHint: '脚步声', position: 0.3, duration: 6.5 }] }
+  ];
+  const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
+  // 两条独立条目，不是合并展示
+  assert.ok(text.includes('#1'));
+  assert.ok(text.includes('#2'));
+  assert.ok(text.includes('3.00'));
+  assert.ok(text.includes('6.50'));
+});
+
+test('buildUnmatchedSfxListText duration 缺失显示"未提供"', () => {
+  const lines = [
+    { sfx: [{ name: '雷声', source: 'unmatched', unmatchedHint: '雷声', position: 0.5 }] }
+  ];
+  const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
+  assert.ok(text.includes('未提供'));
+});
+
+test('buildUnmatchedSfxListText 跳过已匹配音效', () => {
+  const lines = [
+    { sfx: [{ name: '雷声', source: 'local', position: 0.5, duration: 2 }] },
+    { sfx: [{ name: '开门声', source: 'unmatched', unmatchedHint: '开门声', position: 0.3, duration: 1 }] }
+  ];
+  const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
+  assert.ok(!text.includes('雷声'));
+  assert.ok(text.includes('开门声'));
+});
+
+test('buildUnmatchedSfxListText 无未匹配音效时返回空串', () => {
+  const lines = [{ sfx: [{ name: 'x', source: 'local' }] }];
+  const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
+  assert.equal(text, '');
 });

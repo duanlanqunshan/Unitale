@@ -542,3 +542,70 @@ export function sanitizeEmotionFields(rawEmotion, rawIntensity) {
     intensity: VALID_INTENSITIES.has(intensity) ? intensity : '中等',
   };
 }
+
+// ============================================================
+// 工单 B —— 未匹配音效清单文本生成
+// ============================================================
+//
+// 未匹配仅指 source==='unmatched' 或仍带 unmatchedHint 的音效。
+// 同名音效在多条台词中出现时，按每个台词位置分别输出建议时长、触发文本、触发方式、相对位置，
+// 不求平均、不互相覆盖；duration 缺失显示"未提供"。
+// 真实 TTS 音频时间轴才是音效定位的最终标准，anchor_text 仅作语义参考。
+const ANCHOR_MODE_LABELS = {
+  start: '动作开始时',
+  center: '动作中段',
+  end: '动作结束时',
+  after_dialogue: '台词结束后'
+};
+
+function formatDuration(sec) {
+  if (typeof sec !== 'number' || !Number.isFinite(sec)) return '未提供';
+  return `${sec.toFixed(2)} 秒`;
+}
+
+export function buildUnmatchedSfxListText(scriptLines, generatedAt) {
+  const items = Array.isArray(scriptLines) ? scriptLines : [];
+  const groups = new Map(); // name -> [{ lineNo, sfx }]
+
+  items.forEach((line, index) => {
+    if (!line || !Array.isArray(line.sfx)) return;
+    line.sfx.forEach(s => {
+      if (s.source !== 'unmatched' && !s.unmatchedHint) return;
+      const name = String(s.unmatchedHint || s.name || '(未命名)');
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push({ lineNo: index + 1, sfx: s });
+    });
+  });
+
+  if (groups.size === 0) return '';
+
+  const now = generatedAt instanceof Date ? generatedAt : new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const totalOccurrences = [...groups.values()].reduce((sum, arr) => sum + arr.length, 0);
+
+  let content = '';
+  content += '='.repeat(30) + '\n';
+  content += `未匹配音效清单\n`;
+  content += `生成时间：${stamp}\n`;
+  content += `共 ${groups.size} 条未匹配音效，涉及 ${totalOccurrences} 处台词\n`;
+  content += '='.repeat(30) + '\n\n';
+
+  let i = 1;
+  for (const [name, occurrences] of groups) {
+    content += `【${i}】${name}\n`;
+    for (const { lineNo, sfx } of occurrences) {
+      const posPct = Math.round((Number(sfx.position ?? 0)) * 100);
+      const anchorText = sfx.anchor_text || '(无)';
+      const anchorLabel = ANCHOR_MODE_LABELS[sfx.anchor_mode] || ANCHOR_MODE_LABELS.start;
+      content += `  - 台词 #${lineNo}\n`;
+      content += `    触发文本：${anchorText}\n`;
+      content += `    触发方式：${anchorLabel}\n`;
+      content += `    相对位置：${posPct}%\n`;
+      content += `    建议时长：${formatDuration(sfx.duration)}\n`;
+    }
+    content += '\n';
+    i++;
+  }
+  return content;
+}

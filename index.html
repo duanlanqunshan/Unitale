@@ -2229,9 +2229,12 @@
 - **首要原则**: 凡有声可配处，尽量为每句台词添加上「sfx」字段。不要因为"不确定库中是否有精确匹配"就省略——命中库中名称用原名；若库中没有完全同名素材，**不要放弃**，而是用写实、简洁、可被搜索引擎匹配的关键词为音效命名（如"脚步_男女_走廊_远去"、"雨_窗外_夜"），系统会自动对这些描述性名称做二次匹配（含 LLM 兜底重定向 + Freesound 在线检索）。
 - **严格限制**: 音效名称只能来自【音效库】+ 以上描述的**写实关键词**。**绝对禁止**在「sfx」字段中使用【背景音乐库】中的名称。SFX 只能使用【音效库】的内容或写实描述词。
 - **支持多音效**: 一句台词中可以插入多个音效，只要位置合理（如开头关门，中间脚步声）。
-- 格式: 「"sfx": [{"name": "音效名称或写实描述词", "position": 0.5}, {"name": "另一音效", "position": 0.9}]」
-- 「position」: 0.0-1.0 之间的浮点数，表示音效在**台词念白时长内**的插入位置（例如 0.0 为开始，1.0 为念白结束）。
-- **重要**: 「position」计算**不包含**「break_duration」（停顿时间）。即 1.0 代表台词说完的那一刻，而不是停顿结束的那一刻。
+- 格式: 「"sfx": [{"name": "音效名称或写实描述词", "position": 0.5, "duration": 1.2, "anchor_text": "对应原文短语", "anchor_mode": "start"}, {"name": "另一音效", "position": 0.9, "duration": 0.5, "anchor_text": "另一动作", "anchor_mode": "end"}]」
+- 「position」: 0.0-1.0 之间的浮点数，表示音效在**台词念白时长内**的插入位置（例如 0.0 为开始，1.0 为念白结束）。仅作为兼容兜底位，真实播放位置以音频时间轴为准。
+- 「duration」: 该音效素材的**建议制作时长**，单位为秒，必须是 0.1~60 之间的正数（允许小数）。瞬时撞击/按键/关门约 0.1~3 秒；脚步/开门/连续动作约 0.5~8 秒；环境持续音（风雨、室内底噪）按剧情覆盖范围给 2~60 秒。每个 sfx 都必须返回 duration。
+- 「anchor_text」: 该音效对应的**原文短语**（必须从当前台词 text_content 中复制连续几个字），仅作语义参考，不代表真实音频秒数。缺失时填空串。
+- 「anchor_mode」: 音效相对锚点的触发方式，四选一：\`start\`（动作开始时）、\`center\`（动作中段）、\`end\`（动作结束时）、\`after_dialogue\`（台词结束后的停顿中）。
+- **重要**: 「position」计算**不包含**「break_duration」（停顿时间）。即 1.0 代表台词说完的那一刻，而不是停顿结束的那一刻。anchor_text 仅为语义线索，真实定位以生成的 TTS 音频时间轴为最终标准，系统支持人工微调。
 - **间隔音效**: 如果音效发生在台词后的停顿期间，请将其加入该台词的「sfx」列表，位置设为 1.0。
 - **持续型环境音（Ambient）**: 如果剧情蕴含持续背景声（如风声、雨声、钟摆声、室内沉闷底噪），请使用【音效库】中标注为「持续/Ambient」的素材，或给出注明 ambient 语义的写实描述（如"风声_持续_窗外"）。这类音效在播放端会自动贯穿整句台词。
 - **静默也是有声音的**: 剧情描写"屋内一片死寂""突然安静下来""心跳声"时，也请添加对应 sfx（如室内静音底噪、心跳声），**不要因"此刻似乎没有明显动作"就跳过**。
@@ -2298,20 +2301,20 @@
 [
 \${bgmExampleLine}
   {"type": "dialogue", "role_name": "老李", "text_content": "别接那个电话！", "emotion": "害怕", "intensity": "强烈", "break_duration": 0},
-  {"type": "dialogue", "role_name": "旁白", "text_content": "老李猛地按住了我的手，脸色惨白，", "emotion": "平静", "intensity": "中等", "break_duration": 0, "sfx": [{"name": "衣物摩擦_手臂被按住", "position": 0.2}]},
-  {"type": "dialogue", "role_name": "老李", "text_content": "那是昨晚值班的小张打来的。", "emotion": "害怕", "intensity": "较强", "break_duration": 0.5, "sfx": [{"name": "电话震动_持续", "position": 0.0}]},
+  {"type": "dialogue", "role_name": "旁白", "text_content": "老李猛地按住了我的手，脸色惨白，", "emotion": "平静", "intensity": "中等", "break_duration": 0, "sfx": [{"name": "衣物摩擦_手臂被按住", "position": 0.2, "duration": 0.8, "anchor_text": "按住了我的手", "anchor_mode": "start"}]},
+  {"type": "dialogue", "role_name": "老李", "text_content": "那是昨晚值班的小张打来的。", "emotion": "害怕", "intensity": "较强", "break_duration": 0.5, "sfx": [{"name": "电话震动_持续", "position": 0.0, "duration": 4.5, "anchor_text": "小张打来的", "anchor_mode": "start"}]},
   {"type": "dialogue", "role_name": "旁白", "text_content": "我愣住了，看着办公桌上疯狂震动的座机：", "emotion": "平静", "intensity": "中等", "break_duration": 0\${sfxExample}},
-  {"type": "dialogue", "role_name": "我", "text_content": "可是……小张不是今早已经确认死亡了吗？", "emotion": "惊喜", "intensity": "微弱", "break_duration": 0.5, "sfx": [{"name": "心跳_单人_紧张", "position": 0.35}]},
+  {"type": "dialogue", "role_name": "我", "text_content": "可是……小张不是今早已经确认死亡了吗？", "emotion": "惊喜", "intensity": "微弱", "break_duration": 0.5, "sfx": [{"name": "心跳_单人_紧张", "position": 0.35, "duration": 2.5, "anchor_text": "愣住了", "anchor_mode": "start"}]},
   {"type": "dialogue", "role_name": "老李", "text_content": "对，", "emotion": "低落", "intensity": "中等", "break_duration": 0},
   {"type": "dialogue", "role_name": "旁白", "text_content": "老李的声音在发抖，", "emotion": "平静", "intensity": "中等", "break_duration": 0},
-  {"type": "dialogue", "role_name": "老李", "text_content": "所以，别接。如果你接了，他会问你为什么不救他。", "emotion": "害怕", "intensity": "强烈", "break_duration": 0, "sfx": [{"name": "室内低沉底噪_持续", "position": 0.0}, {"name": "电话铃声", "position": 1.0}]}
+  {"type": "dialogue", "role_name": "老李", "text_content": "所以，别接。如果你接了，他会问你为什么不救他。", "emotion": "害怕", "intensity": "强烈", "break_duration": 0, "sfx": [{"name": "室内低沉底噪_持续", "position": 0.0, "duration": 6.0, "anchor_text": "声音在发抖", "anchor_mode": "start"}, {"name": "电话铃声", "position": 1.0, "duration": 3.0, "anchor_text": "别接。如果你接了", "anchor_mode": "after_dialogue"}]}
 ]
 
-**sfx 字段四种典型形态参考**（请模仿这种密集配音风格，但不要把本段说明写进 JSON 输出）：
-1. 动作瞬时音（动词开头，position 取 0.0-0.3）："sfx": [{"name": "脚步_走廊_远去", "position": 0.1}]
-2. 环境持续音（标注 [持续/Ambient] 语义，position 取 0.0，贯穿整句）："sfx": [{"name": "雨_窗外 [持续/Ambient]", "position": 0.0}]
-3. 间隔音效（在 break_duration 里触发，position 用 1.0）："sfx": [{"name": "门_关上_轻", "position": 1.0}]
-4. 静默段标配（剧情安静时用心跳/呼吸声填补，position 取 0.3-0.5）："sfx": [{"name": "心跳_单人_紧张", "position": 0.3}]
+**sfx 字段四种典型形态参考**（请模仿这种密集配音风格，并始终带上 duration/anchor_text/anchor_mode，但不要把本段说明写进 JSON 输出）：
+1. 动作瞬时音（动词开头，position 取 0.0-0.3，duration 短）："sfx": [{"name": "脚步_走廊_远去", "position": 0.1, "duration": 1.2, "anchor_text": "走廊", "anchor_mode": "start"}]
+2. 环境持续音（标注 [持续/Ambient] 语义，position 取 0.0，贯穿整句，duration 长）："sfx": [{"name": "雨_窗外 [持续/Ambient]", "position": 0.0, "duration": 10.0, "anchor_text": "雨", "anchor_mode": "start"}]
+3. 间隔音效（在 break_duration 里触发，position 用 1.0，anchor_mode 用 after_dialogue）："sfx": [{"name": "门_关上_轻", "position": 1.0, "duration": 0.6, "anchor_text": "关上", "anchor_mode": "after_dialogue"}]
+4. 静默段标配（剧情安静时用心跳/呼吸声填补，position 取 0.3-0.5）："sfx": [{"name": "心跳_单人_紧张", "position": 0.3, "duration": 2.0, "anchor_text": "紧张", "anchor_mode": "center"}]
 
 # 输入内容
 
@@ -3506,43 +3509,17 @@
                 // Phase 6 兼容老调用名（若其他地方还用 confirmSfxReplace，转发到 resolveUnmatchedSfx）
                 const confirmSfxReplace = async (unmatchedName) => resolveUnmatchedSfx(unmatchedName);
 
-                // 下载未匹配音效清单：收集所有 source==='unmatched' 或带 unmatchedHint 的 sfx，
-                // 按音效名分组汇总出现在哪些台词序号，输出为 txt 文件方便离线到 Freesound 等站点搜索。
-                const downloadUnmatchedSfxList = () => {
-                    const groups = new Map();
-                    scriptLines.value.forEach((line, index) => {
-                        if (!line.sfx || !Array.isArray(line.sfx)) return;
-                        line.sfx.forEach(s => {
-                            if (s.source !== 'unmatched' && !s.unmatchedHint) return;
-                            const name = s.unmatchedHint || s.name || '(未命名)';
-                            if (!groups.has(name)) groups.set(name, []);
-                            groups.get(name).push(index + 1);
-                        });
-                    });
-                    if (groups.size === 0) {
+                // 下载未匹配音效清单：每个音效在每个台词位置分别输出建议时长、触发文本、
+                // 触发方式、相对位置，方便后期按此制作音效素材。同名音效多处出现分别保留各自 duration。
+                const downloadUnmatchedSfxList = async () => {
+                    const { buildUnmatchedSfxListText } = await unitaleLogicPromise;
+                    const content = buildUnmatchedSfxListText(scriptLines.value, new Date());
+                    if (!content) {
                         alert('当前没有未匹配的音效');
                         return;
                     }
                     const now = new Date();
                     const pad = n => String(n).padStart(2, '0');
-                    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-                    const totalOccurrences = [...groups.values()].reduce((sum, arr) => sum + arr.length, 0);
-                    let content = '';
-                    content += '='.repeat(30) + '\n';
-                    content += `未匹配音效清单\n`;
-                    content += `生成时间：${stamp}\n`;
-                    content += `共 ${groups.size} 条未匹配音效，涉及 ${totalOccurrences} 处台词\n`;
-                    content += '='.repeat(30) + '\n\n';
-                    let i = 1;
-                    for (const [name, lines] of groups) {
-                        const deduped = [...new Set(lines)].sort((a, b) => a - b);
-                        content += `【${i}】${name}\n`;
-                        deduped.forEach(lineNo => {
-                            content += `  - 台词 #${lineNo}\n`;
-                        });
-                        content += '\n';
-                        i++;
-                    }
                     const fileStamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
                     const blob = new Blob(['\uFEFF' + content], { type: 'text/plain;charset=utf-8' });
                     const url = URL.createObjectURL(blob);
@@ -6804,7 +6781,7 @@ const generateVideo = async () => {
                         : '';
 
                     const sfxExample = enabledSfx.length > 0
-                        ? `, "sfx": [{"name": "${enabledSfx[0].name}", "position": 0.2}]`
+                        ? `, "sfx": [{"name": "${enabledSfx[0].name}", "position": 0.2, "duration": 1.5, "anchor_text": "座机", "anchor_mode": "start"}]`
                         : '';
 
                     // 原文是唯一真源：程序先无损切片，AI 只负责为 segment_id 返回元数据。
