@@ -22,6 +22,24 @@ export function updateSfxQuery(sfx, nextName) {
   return sfx;
 }
 
+const VALID_ANCHOR_MODES = new Set(['start', 'center', 'end', 'after_dialogue']);
+
+/**
+ * 规范化 LLM 返回的单个音效标注。
+ *
+ * 保留的字段：
+ *   name           必填，非空字符串
+ *   position       0~1，非法回退 0.5
+ *   duration       LLM 建议制作时长（秒）；非法/缺失回退 null
+ *   anchor_text    对应剧情/动作文本，仅语义参考，缺失为 ''
+ *   anchor_mode    start|center|end|after_dialogue，非法回退 'start'
+ *   offset         人工微调偏移（秒），非法回退 0
+ *   start_time     以真实音频为标准的绝对起始秒数，默认 null
+ *   position_source estimated|audio_aligned|manual，默认 estimated
+ *
+ * 真实 TTS 音频时间轴是音效定位的唯一最终标准；anchor_text 仅为语义线索，
+ * 不参与最终播放秒数计算。老工程缺少新字段时全部回退默认值，不阻断导入。
+ */
 export function normalizeSfxAnnotation(value) {
   if (!value || typeof value !== 'object') return null;
   const name = String(value.name ?? '').trim();
@@ -32,7 +50,43 @@ export function normalizeSfxAnnotation(value) {
     ? Math.max(0, Math.min(1, parsedPosition))
     : 0.5;
 
-  return { name, position };
+  // duration：建议时长（秒）。范围 0.1~60，保留两位小数；非法/缺失 → null
+  const rawDuration = value.duration;
+  let duration = null;
+  {
+    const n = typeof rawDuration === 'number' ? rawDuration : Number(rawDuration);
+    if (Number.isFinite(n) && n >= 0.1 && n <= 60) {
+      duration = Math.round(n * 100) / 100;
+    }
+  }
+
+  // anchor_text：语义锚点文本。仅作展示/人工对齐参考，缺失为 ''
+  const anchor_text = typeof value.anchor_text === 'string' ? value.anchor_text : '';
+
+  // anchor_mode：start|center|end|after_dialogue，非法回退 'start'
+  const anchor_mode = VALID_ANCHOR_MODES.has(value.anchor_mode) ? value.anchor_mode : 'start';
+
+  // offset：人工微调偏移（秒），可正可负，非法回退 0
+  const rawOffset = value.offset;
+  let offsetNum = 0;
+  {
+    const n = typeof rawOffset === 'number' ? rawOffset : Number(rawOffset);
+    if (Number.isFinite(n)) offsetNum = n;
+  }
+  const offset = offsetNum;
+
+  // start_time：真实音频绝对起始秒数；默认 null（表示尚未对齐）
+  const rawStart = value.start_time;
+  const start_time = typeof rawStart === 'number' && Number.isFinite(rawStart)
+    ? rawStart
+    : null;
+
+  // position_source：estimated|audio_aligned|manual，默认 estimated
+  const position_source = ['estimated', 'audio_aligned', 'manual'].includes(value.position_source)
+    ? value.position_source
+    : 'estimated';
+
+  return { name, position, duration, anchor_text, anchor_mode, offset, start_time, position_source };
 }
 
 /**
@@ -307,6 +361,12 @@ export function buildMappedSfxItem(annotation, library) {
   return {
     name: matched || s.name,
     position: s.position,
+    duration: s.duration,
+    anchor_text: s.anchor_text,
+    anchor_mode: s.anchor_mode,
+    offset: s.offset,
+    start_time: s.start_time,
+    position_source: s.position_source,
     source: matched ? 'local' : 'unmatched',
     lastQuery: s.name,
     unmatchedHint: matched ? null : s.name

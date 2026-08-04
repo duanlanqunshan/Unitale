@@ -23,11 +23,23 @@ import {
 test('LLM 音效标注会规范名称与位置并拒绝非法项', () => {
   assert.deepEqual(normalizeSfxAnnotation({ name: '  门响  ', position: '0.4' }), {
     name: '门响',
-    position: 0.4
+    position: 0.4,
+    duration: null,
+    anchor_text: '',
+    anchor_mode: 'start',
+    offset: 0,
+    start_time: null,
+    position_source: 'estimated'
   });
   assert.deepEqual(normalizeSfxAnnotation({ name: '雷声' }), {
     name: '雷声',
-    position: 0.5
+    position: 0.5,
+    duration: null,
+    anchor_text: '',
+    anchor_mode: 'start',
+    offset: 0,
+    start_time: null,
+    position_source: 'estimated'
   });
   assert.equal(normalizeSfxAnnotation({ name: '脚步', position: -2 }).position, 0);
   assert.equal(normalizeSfxAnnotation({ name: '脚步', position: 3 }).position, 1);
@@ -147,6 +159,12 @@ test('buildMappedSfxItem 本地命中写 local，未命中写 unmatched 并保�
   assert.deepEqual(hit, {
     name: '电话铃声',
     position: 1.0,
+    duration: null,
+    anchor_text: '',
+    anchor_mode: 'start',
+    offset: 0,
+    start_time: null,
+    position_source: 'estimated',
     source: 'local',
     lastQuery: '电话铃声',
     unmatchedHint: null
@@ -473,5 +491,158 @@ test('splitDialogueLine 拆分后子片段携带清洗过的 emotion/intensity',
   parts.forEach(p => {
     assert.equal(p.emotion, '平静');
     assert.equal(p.intensity, '中等');
+  });
+});
+
+// ============================================================
+// 工单 A —— 音效数据规范化：duration / anchor_text / anchor_mode / offset / start_time / position_source
+// ============================================================
+
+test('normalizeSfxAnnotation 保留合法 duration 并清洗为数字', () => {
+  // 合法数字
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: 1.5 }).duration, 1.5);
+  // 数字字符串
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: '1.5' }).duration, 1.5);
+  // 边界
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: 0.1 }).duration, 0.1);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: 60 }).duration, 60);
+});
+
+test('normalizeSfxAnnotation 非法 duration 回退为 null 且不阻断音效', () => {
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: '1.5秒' }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: -1 }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: 0 }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: 61 }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: NaN }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: null }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: undefined }).duration, null);
+  assert.equal(normalizeSfxAnnotation({ name: '雷声', position: 0.3 }).duration, null);
+  // 即使 duration 非法，音效对象仍应返回（不阻断）
+  const bad = normalizeSfxAnnotation({ name: '雷声', position: 0.3, duration: '坏值' });
+  assert.ok(bad && bad.name === '雷声');
+});
+
+test('normalizeSfxAnnotation 保留 anchor_text / anchor_mode 并规范化', () => {
+  const r = normalizeSfxAnnotation({
+    name: '开门声',
+    position: 0.5,
+    anchor_text: '猛地推开了门',
+    anchor_mode: 'start'
+  });
+  assert.equal(r.anchor_text, '猛地推开了门');
+  assert.equal(r.anchor_mode, 'start');
+
+  // anchor_mode 非法 → 回退 'start'
+  assert.equal(normalizeSfxAnnotation({ name: 'x', anchor_mode: 'xxx' }).anchor_mode, 'start');
+  // anchor_text 缺失 → 空串
+  assert.equal(normalizeSfxAnnotation({ name: 'x' }).anchor_text, '');
+  // anchor_text 非字符串 → 空串
+  assert.equal(normalizeSfxAnnotation({ name: 'x', anchor_text: 123 }).anchor_text, '');
+});
+
+test('normalizeSfxAnnotation 默认 offset=0、start_time=null、position_source=estimated', () => {
+  const r = normalizeSfxAnnotation({ name: 'x', position: 0.5 });
+  assert.equal(r.offset, 0);
+  assert.equal(r.start_time, null);
+  assert.equal(r.position_source, 'estimated');
+  // 合法 offset 保留
+  assert.equal(normalizeSfxAnnotation({ name: 'x', offset: 1.5 }).offset, 1.5);
+  assert.equal(normalizeSfxAnnotation({ name: 'x', offset: '-0.3' }).offset, -0.3);
+  // 非法 offset → 0
+  assert.equal(normalizeSfxAnnotation({ name: 'x', offset: 'abc' }).offset, 0);
+});
+
+test('旧工程 sfx 无新字段时仍能正常规范化且不抛错', () => {
+  // 典型旧数据：只有 name 和 position
+  const r = normalizeSfxAnnotation({ name: '脚步声', position: 0.4 });
+  assert.deepEqual(r, {
+    name: '脚步声',
+    position: 0.4,
+    duration: null,
+    anchor_text: '',
+    anchor_mode: 'start',
+    offset: 0,
+    start_time: null,
+    position_source: 'estimated'
+  });
+});
+
+test('buildMappedSfxItem 命中保留 duration/anchor 等定位字段', () => {
+  const library = [{ name: '电话铃声', filename: 'phone.wav' }];
+  const r = buildMappedSfxItem({
+    name: '电话铃声',
+    position: 0.8,
+    duration: 1.2,
+    anchor_text: '电话响了',
+    anchor_mode: 'start',
+    offset: 0.1
+  }, library);
+  assert.equal(r.source, 'local');
+  assert.equal(r.duration, 1.2);
+  assert.equal(r.anchor_text, '电话响了');
+  assert.equal(r.anchor_mode, 'start');
+  assert.equal(r.offset, 0.1);
+  assert.equal(r.unmatchedHint, null);
+});
+
+test('buildMappedSfxItem 未命中同样保留 duration/anchor 等定位字段', () => {
+  const library = [{ name: '电话铃声', filename: 'phone.wav' }];
+  const r = buildMappedSfxItem({
+    name: '木门猛然撞击',
+    position: 0.3,
+    duration: 0.8,
+    anchor_text: '猛地撞开门',
+    anchor_mode: 'end'
+  }, library);
+  assert.equal(r.source, 'unmatched');
+  assert.equal(r.duration, 0.8);
+  assert.equal(r.anchor_text, '猛地撞开门');
+  assert.equal(r.anchor_mode, 'end');
+  assert.equal(r.unmatchedHint, '木门猛然撞击');
+});
+
+test('splitDialogueLine 拆分时保留每个音效的 duration 和定位字段', () => {
+  const longText = `${'甲'.repeat(70)}，${'乙'.repeat(65)}。`;
+  const line = {
+    id: 'L1',
+    text: longText,
+    emotion: '平静',
+    intensity: '中等',
+    sfx: [
+      {
+        name: '脚步',
+        position: 0.1,
+        duration: 1.5,
+        anchor_text: '走',
+        anchor_mode: 'start',
+        offset: 0.2,
+        start_time: null,
+        position_source: 'estimated'
+      },
+      {
+        name: '关门',
+        position: 0.9,
+        duration: 0.5,
+        anchor_text: '关',
+        anchor_mode: 'end',
+        offset: 0,
+        start_time: 12.3,
+        position_source: 'manual'
+      }
+    ]
+  };
+  const parts = splitDialogueLine(line, 120);
+  assert.ok(parts.length >= 2);
+  // 每个拆分片段里的音效都应保留 duration / anchor_text / anchor_mode / offset / start_time / position_source
+  const allSfx = parts.flatMap(p => p.sfx);
+  assert.ok(allSfx.length > 0);
+  allSfx.forEach(s => {
+    assert.equal(typeof s.duration, 'number');
+    assert.equal(typeof s.anchor_text, 'string');
+    assert.ok(['start', 'center', 'end', 'after_dialogue'].includes(s.anchor_mode));
+    assert.equal(typeof s.offset, 'number');
+    // start_time 可以是 null 或 number
+    assert.ok(s.start_time === null || typeof s.start_time === 'number');
+    assert.ok(['estimated', 'audio_aligned', 'manual'].includes(s.position_source));
   });
 });
