@@ -400,16 +400,17 @@ export function attachManualSfxFile(sfx, file, relPath, options = {}) {
 
 // 内部：本地字符串匹配（精确 + 包含），返回命中条目的 name，未命中返回空串。
 // 与 index.html 里 findBestMatch 行为等价，提到 mjs 后可被测、可被复用。
-function findBestMatchName(target, library) {
+export function findBestMatchName(target, library) {
   if (!target) return '';
+  const lib = Array.isArray(library) ? library : [];
   const t = String(target).trim().toLowerCase();
   if (!t) return '';
   // 1. 精确匹配
-  const exact = library.find(i => String(i.name).toLowerCase() === t);
+  const exact = lib.find(i => String(i.name).toLowerCase() === t);
   if (exact) return exact.name;
 
   // 2. 模糊匹配（包含关系）
-  const candidates = library.filter(i => {
+  const candidates = lib.filter(i => {
     const n = String(i.name).toLowerCase();
     return n.includes(t) || t.includes(n);
   });

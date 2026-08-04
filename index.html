@@ -651,7 +651,12 @@
                         <button type="button" @click="retryAllUnmatchedSfx"
                             :disabled="unmatchedSfxCount === 0"
                             class="px-4 py-2 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-                            🔁 重新匹配 {{ unmatchedSfxCount }} 条未命中音效
+                            🌐 在线重新匹配 {{ unmatchedSfxCount }} 条未命中音效
+                        </button>
+                        <button type="button" @click="localRematchAllSfx"
+                            :disabled="unmatchedSfxCount === 0"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            💻 本地重新匹配 {{ unmatchedSfxCount }} 条未命中音效
                         </button>
                         <button type="button" @click="downloadUnmatchedSfxList"
                             :disabled="unmatchedSfxCount === 0"
@@ -659,8 +664,8 @@
                             ⬇️ 下载未匹配音效清单
                         </button>
                         <span class="text-xs text-amber-800">
-                            点击后将自动对当前脚本中所有未命中的音效执行 LLM 兜底 + Freesound 在线检索。<br>
-                            <span class="text-amber-700">说明：</span>LLM 兜底需在"模型配置"页配置兜底 LLM；Freesound 需启用在线检索开关。
+                            「🌐 在线重新匹配」会对所有未命中音效执行 LLM 兜底 + Freesound 在线检索（需配置 LLM/启用在线开关）。<br>
+                            「💻 本地重新匹配」只用本地音效库做精确/包含匹配，不联网，适合离线或不想消耗 API 时使用。
                         </span>
                     </div>
                 </div>
@@ -3553,6 +3558,71 @@
                     const tipMsg = `以下 ${nameList.length} 个音效未命中，将自动执行 LLM 兜底 + Freesound 在线检索：\n${summary}\n\n点击"确定"开始；点击"取消"放弃本次操作。`;
                     if (!window.confirm(tipMsg)) return;
                     await runUnmatchedSfxWorkflow(nameList);
+                };
+
+                // 工单 C：本地重新匹配按钮入口
+                // 仅用本地音效库的字段比对（精确 + 模糊包含），不调用任何 LLM/Freesound，离线可用。
+                // 命中后从库条目复制 name/filename/source/scanRoot/volume/trimStart/trimEnd 回写到每个 sfx，
+                // 并清空 unmatchedHint 表示已解除待匹配状态；保留原 lastQuery 便于再次重新匹配。
+                // 完成后弹窗汇总：命中 N / 未命中 M，列出未命中名。
+                const localRematchAllSfx = async () => {
+                    const { findBestMatchName } = await unitaleLogicPromise;
+                    const unmatchedNames = new Set();
+                    scriptLines.value.forEach(line => {
+                        if (line.sfx && Array.isArray(line.sfx)) {
+                            line.sfx.forEach(s => {
+                                if (s.source === 'unmatched' || s.unmatchedHint) {
+                                    unmatchedNames.add(s.unmatchedHint || s.name);
+                                }
+                            });
+                        }
+                    });
+                    if (unmatchedNames.size === 0) {
+                        alert('当前没有未命中的音效需要本地重新匹配');
+                        return;
+                    }
+                    if (!window.confirm(`将对 ${unmatchedNames.size} 个未命中音效执行本地库匹配（不联网），是否继续？`)) return;
+
+                    const lib = sfxLibrary.value || [];
+                    const hitNames = [];     // 命中并已回写的原名
+                    const stillUnmatched = []; // 本地库仍未命中的原名
+
+                    for (const unmatched of Array.from(unmatchedNames)) {
+                        const matchedName = findBestMatchName(unmatched, lib);
+                        if (matchedName) {
+                            const libItem = lib.find(s => s.name === matchedName) || {};
+                            // 回写到所有 unmatchedHint === unmatched 的 sfx 条目
+                            scriptLines.value.forEach(line => {
+                                if (!line.sfx || !Array.isArray(line.sfx)) return;
+                                line.sfx.forEach(s => {
+                                    if ((s.unmatchedHint || s.name) === unmatched && (s.source === 'unmatched' || s.unmatchedHint)) {
+                                        s.name = matchedName;
+                                        s.lastQuery = unmatched;
+                                        s.unmatchedHint = null;
+                                        s.source = libItem.source || 'local';
+                                        if (libItem.filename) s.filename = libItem.filename;
+                                        if (libItem.scanRoot) s.scanRoot = libItem.scanRoot;
+                                        if (typeof libItem.volume === 'number') s.volume = libItem.volume;
+                                        if (typeof libItem.trimStart === 'number') s.trimStart = libItem.trimStart;
+                                        if (typeof libItem.trimEnd === 'number') s.trimEnd = libItem.trimEnd;
+                                    }
+                                });
+                            });
+                            hitNames.push(unmatched);
+                        } else {
+                            stillUnmatched.push(unmatched);
+                        }
+                    }
+
+                    // 弹窗汇总
+                    const okList = hitNames.length > 0 ? hitNames.map(n => `• ${n} ✓`).join('\n') : '（无）';
+                    const missList = stillUnmatched.length > 0 ? stillUnmatched.map(n => `• ${n} ✗`).join('\n') : '（无）';
+                    const total = hitNames.length + stillUnmatched.length;
+                    const msg = `本地重新匹配完成（共 ${total} 个）\n\n` +
+                        `命中 ${hitNames.length} 个：\n${okList}\n\n` +
+                        `仍未命中 ${stillUnmatched.length} 个：\n${missList}\n\n` +
+                        `仍未命中的音效可以再点「🌐 在线重新匹配」走 LLM/Freesound，或下载清单到外部素材站搜索。`;
+                    window.alert(msg);
                 };
 
                 // --- 角色库管理逻辑 (左侧栏) ---
@@ -7542,6 +7612,7 @@ ${JSON.stringify(segmentPayload)}
                     freesoundToken, showFreesoundToken, freesoundEnabled, freesoundAutoImport, saveFreesoundConfig,
                     llmFallbackMatch, fetchFreesoundSfx, confirmSfxReplace,
                     resolveUnmatchedSfx, runUnmatchedSfxWorkflow, retryAllUnmatchedSfx,
+                    localRematchAllSfx,
                     downloadUnmatchedSfxList,
                     // Phase 3/4：本地音效文件夹扫描
                     sfxScanRootPath, sfxScanRootExists, sfxScanRootStatus, isScanningLocal, scannedSfxItems, sfxSaveDir,

@@ -18,7 +18,8 @@ import {
   validateSourceSegments,
   compressChineseWhitespace,
   sanitizeEmotionFields,
-  buildUnmatchedSfxListText
+  buildUnmatchedSfxListText,
+  findBestMatchName
 } from '../unitale_logic.mjs';
 
 test('LLM 音效标注会规范名称与位置并拒绝非法项', () => {
@@ -701,4 +702,28 @@ test('buildUnmatchedSfxListText 无未匹配音效时返回空串', () => {
   const lines = [{ sfx: [{ name: 'x', source: 'local' }] }];
   const text = buildUnmatchedSfxListText(lines, new Date('2026-08-04T18:30:00'));
   assert.equal(text, '');
+});
+
+// 工单 C：findBestMatchName 本地匹配（导出后供本地重新匹配复用）
+test('findBestMatchName 精确命中返回库条目名', () => {
+  const lib = [{ name: '脚步_走廊_远去' }, { name: '心跳_单人_紧张' }];
+  assert.equal(findBestMatchName('脚步_走廊_远去', lib), '脚步_走廊_远去');
+});
+
+test('findBestMatchName 模糊包含命中返回最接近长度的库条目名', () => {
+  const lib = [{ name: '脚步' }, { name: '脚步_走廊_远去' }];
+  // '脚步_走廊_远去改写' 既被库里两项包含（库里短名被它包含），按 |len-target| 升序取最接近的
+  assert.equal(findBestMatchName('脚步', lib), '脚步');
+  assert.equal(findBestMatchName('脚步_走廊_远去改写', lib), '脚步_走廊_远去');
+});
+
+test('findBestMatchName 大小写不敏感', () => {
+  const lib = [{ name: 'Door Close' }];
+  assert.equal(findBestMatchName('door close', lib), 'Door Close');
+});
+
+test('findBestMatchName 库为空或 target 为空返回空串', () => {
+  assert.equal(findBestMatchName('', [{ name: 'x' }]), '');
+  assert.equal(findBestMatchName('x', []), '');
+  assert.equal(findBestMatchName('x', null), '');
 });
