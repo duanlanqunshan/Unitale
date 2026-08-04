@@ -398,6 +398,41 @@ export function attachManualSfxFile(sfx, file, relPath, options = {}) {
   return sfx;
 }
 
+/**
+ * 工单 E：计算音效在真实音频时间轴上的播放起点。
+ *
+ * 真实音频时间轴是音效位置的唯一最终标准：
+ *   - 已被人工手动微调（position_source === 'manual' 且 start_time 为有限数）→ 直接采用人工值
+ *   - 其它情况 → 按 position（0~1）在台词 [evt.time, evt.time+evt.duration] 区间内插值
+ *     写回 start_time，position_source = 'audio_aligned'
+ *   - offset 字段作为附加微调秒数叠加到最终 start_time
+ *
+ * 写回的 sfx 对象是原对象的浅拷贝，position/anchor_text/anchor_mode/duration 等字段保留。
+ *
+ * @param {object} sfx  音效标注对象（包含 position/offset/start_time/position_source 等）
+ * @param {{time:number, duration:number}} evt  对应台词事件的时间锚点
+ * @returns {object} 写回后的 sfx 对象副本（含 start_time、position_source）
+ */
+export function computeSfxPlayTime(sfx, evt) {
+  const s = { ...(sfx || {}) };
+  if (!evt || typeof evt.time !== 'number' || typeof evt.duration !== 'number') {
+    return s;
+  }
+
+  // 1. 人工手动微调优先
+  if (s.position_source === 'manual' && typeof s.start_time === 'number' && Number.isFinite(s.start_time)) {
+    return s;
+  }
+
+  // 2. 按真实音频时间轴插值
+  const rawPos = parseFloat(s.position);
+  const pos = Number.isFinite(rawPos) ? Math.max(0, Math.min(1, rawPos)) : 0;
+  const offset = typeof s.offset === 'number' && Number.isFinite(s.offset) ? s.offset : 0;
+  s.start_time = Math.max(0, evt.time + evt.duration * pos + offset);
+  s.position_source = 'audio_aligned';
+  return s;
+}
+
 // 内部：本地字符串匹配（精确 + 包含），返回命中条目的 name，未命中返回空串。
 // 与 index.html 里 findBestMatch 行为等价，提到 mjs 后可被测、可被复用。
 export function findBestMatchName(target, library) {

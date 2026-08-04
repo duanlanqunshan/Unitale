@@ -5620,9 +5620,18 @@
                         let okCount = 0;
                         let missCount = 0;
                         const missNos = [];
+                        const manifest = {
+                            generatedAt: new Date().toISOString(),
+                            kind: 'raw_tts_per_line',
+                            naming: '角色名_三位编号.wav',
+                            totalLines: tasks.length,
+                            okCount: 0,
+                            missCount: 0,
+                            lines: []
+                        };
 
                         for (let i = 0; i < tasks.length; i++) {
-                            const { line, lineNo } = tasks[i];
+                            const { line, lineNo } = taskList[i];
                             rawTtsExportStatus.value = `正在拉取台词 ${lineNo}/${tasks.length} 的原始音频...`;
                             let blob = null;
                             if (line.audioUrl) {
@@ -5636,18 +5645,44 @@
                                     blob = await loadAssetFromDB(`line_audio_${line.id}`);
                                 } catch (e) {}
                             }
+                            const role = line.role || line.role_name || '角色';
+                            const text = line.text || '';
                             if (!blob) {
                                 missCount++;
                                 missNos.push(lineNo);
+                                manifest.lines.push({
+                                    lineNo, role, text, filename: null,
+                                    status: 'missing_audio'
+                                });
                                 continue;
                             }
-                            const safeRole = (line.role || line.role_name || '角色')
-                                .replace(/[\/\\?%*:|"<>]/g, '_').trim() || '角色';
+                            const safeRole = role.replace(/[\/\\?%*:|"<>]/g, '_').trim() || '角色';
                             const idx3 = String(lineNo).padStart(3, '0');
                             const filename = `${safeRole}_${idx3}.wav`;
                             zip.file(filename, blob);
                             okCount++;
+                            // 工单 E：附带元数据（sfx 的真实音频时间轴字段一并导出，供后期拼回）
+                            const sfxMeta = (Array.isArray(line.sfx) ? line.sfx : []).map(s => ({
+                                name: s.name,
+                                position: s.position,
+                                duration: s.duration ?? null,
+                                anchor_text: s.anchor_text || '',
+                                anchor_mode: s.anchor_mode || 'start',
+                                offset: s.offset || 0,
+                                start_time: (typeof s.start_time === 'number' && Number.isFinite(s.start_time)) ? s.start_time : null,
+                                position_source: s.position_source || 'estimated',
+                                source: s.source || ''
+                            }));
+                            manifest.lines.push({
+                                lineNo, role, text, filename,
+                                status: 'ok',
+                                sfx: sfxMeta
+                            });
                         }
+
+                        manifest.okCount = okCount;
+                        manifest.missCount = missCount;
+                        zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
                         rawTtsExportStatus.value = '正在压缩 ZIP...';
                         const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
@@ -5667,7 +5702,9 @@
                         if (missCount > 0) {
                             const sample = missNos.slice(0, 10).join(', ');
                             const tail = missNos.length > 10 ? ` 等 ${missCount} 条` : '';
-                            alert(`导出完成：成功 ${okCount} 条，未生成音频跳过 ${missCount} 条（台词 #${sample}${tail}）。未生成音频请先到配音页执行合成。`);
+                            alert(`导出完成：成功 ${okCount} 条，未生成音频跳过 ${missCount} 条（台词 #${sample}${tail}）。\nZIP 内含 manifest.json，记录每句台词及音效的真实音频时间轴。\n未生成音频请先到配音页执行合成。`);
+                        } else {
+                            alert(`导出完成：成功 ${okCount} 条。\nZIP 内含 manifest.json，记录每句台词及音效的真实音频时间轴。`);
                         }
                     } catch (e) {
                         console.error('exportRawTtsZip error:', e);
@@ -5784,7 +5821,6 @@
                                 }
                                 currentTime += (line.break_duration || 0);
                             }
-                        }
                         if (currentBgm) bgmSegments.push({ ...currentBgm, end: currentTime + EXPORT_TAIL_PADDING_SEC });
 
                         // 5. 离线渲染 —— 仅生成纯语音轨 + 纯音效轨（不再生成主混音）
@@ -5821,6 +5857,7 @@
                         exportStatus.value = '正在渲染纯音效轨 (SFX & Ambient Stem)...';
                         await new Promise(r => requestAnimationFrame(r));
 
+                        const { computeSfxPlayTime } = await unitaleLogicPromise;
                         const offlineCtxSfx = new OfflineAudioContext(1, Math.ceil(EXPORT_SAMPLE_RATE * totalDuration), EXPORT_SAMPLE_RATE);
                         // 诊断：导出音效前打印音效可用性、events 数量、sfx 配置
                         console.log('[exportSfx] assets.sfx keys:', Object.keys(assets.sfx));
@@ -5864,12 +5901,23 @@
                                     const sDuration = Math.max(sBuffer.duration * 0.5, evt.duration + fadeOutDur);
                                     sSrc.connect(sGain).connect(offlineCtxSfx.destination);
                                     sSrc.start(ambientStart, sOffset, sDuration);
+
+                                    // 工单 E：把真实音频时间轴写回 sfx 项（ambient 起点 = 台词起点）
+                                    const aligned = computeSfxPlayTime({ ...s, position: 0 }, evt);
+                                    s.start_time = aligned.start_time;
+                                    s.position_source = aligned.position_source;
                                 } else {
                                     // 瞬时音效：按 s.position 在台词中点触发，与主混音 5687-5705 一致
-                                    const pos = parseFloat(s.position) || 0;
-                                    const clampedPos = Math.max(0, Math.min(1, pos));
-                                    const sfxTime = evt.time + (evt.duration * clampedPos);
+                                    // 工单 E：真实音频时间轴计算（人工 manual 优先，未微调用 position 对齐）
+                                    const aligned = computeSfxPlayTime(s, evt);
+                                    const sfxTime = aligned.start_time;
                                     if (!Number.isFinite(sfxTime)) return;
+
+                                    // 写回 sfx 项（保留人工 manual 时不覆盖）
+                                    if (aligned.position_source === 'audio_aligned' || s.position_source !== 'manual') {
+                                        s.start_time = aligned.start_time;
+                                        s.position_source = aligned.position_source;
+                                    }
 
                                     const sSrc = offlineCtxSfx.createBufferSource();
                                     sSrc.buffer = sBuffer;
@@ -5909,7 +5957,18 @@
                                 text: e.line?.text,
                                 startTime: e.time,
                                 duration: e.duration,
-                                sfx: e.line?.sfx || []
+                                // 工单 E：导出每个 sfx 的真实音频时间轴字段，供后期对照
+                                sfx: (e.line?.sfx || []).map(s => ({
+                                    name: s.name,
+                                    position: s.position,
+                                    duration: s.duration ?? null,
+                                    anchor_text: s.anchor_text || '',
+                                    anchor_mode: s.anchor_mode || 'start',
+                                    offset: s.offset || 0,
+                                    start_time: (typeof s.start_time === 'number' && Number.isFinite(s.start_time)) ? s.start_time : null,
+                                    position_source: s.position_source || 'estimated',
+                                    source: s.source || ''
+                                }))
                             }))
                         };
 

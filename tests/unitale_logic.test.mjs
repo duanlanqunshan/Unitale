@@ -19,7 +19,8 @@ import {
   compressChineseWhitespace,
   sanitizeEmotionFields,
   buildUnmatchedSfxListText,
-  findBestMatchName
+  findBestMatchName,
+  computeSfxPlayTime
 } from '../unitale_logic.mjs';
 
 test('LLM 音效标注会规范名称与位置并拒绝非法项', () => {
@@ -726,4 +727,49 @@ test('findBestMatchName 库为空或 target 为空返回空串', () => {
   assert.equal(findBestMatchName('', [{ name: 'x' }]), '');
   assert.equal(findBestMatchName('x', []), '');
   assert.equal(findBestMatchName('x', null), '');
+});
+
+// 工单 E：computeSfxPlayTime —— 计算音效在真实音频时间轴上的播放起点
+// 规则：
+//   1. 若 sfx 已被人工手动微调（position_source === 'manual' 且 start_time 为有限数），
+//      直接返回人工 start_time，position_source 仍回写 'manual'
+//   2. 否则按 position（0~1）在台词 [evtTime, evtTime+evtDuration] 区间内计算
+//      写回 start_time，position_source = 'audio_aligned'
+//   3. position 越界自动 clamp 到 [0,1]；非数字按 0 处理
+//   4. offset 字段作为附加微调秒数叠加到最终 start_time
+const _sfx = (extra) => ({ name: 'x', position: 0.5, source: 'local', ...extra });
+
+test('computeSfxPlayTime 按 position 在台词区间内计算并对齐音频', () => {
+  const s = _sfx({ position: 0.5 });
+  const r = computeSfxPlayTime(s, { time: 10, duration: 4 });
+  assert.equal(r.start_time, 12);
+  assert.equal(r.position_source, 'audio_aligned');
+});
+
+test('computeSfxPlayTime position 越界自动 clamp', () => {
+  assert.equal(computeSfxPlayTime(_sfx({ position: -1 }), { time: 1, duration: 2 }).start_time, 1);
+  assert.equal(computeSfxPlayTime(_sfx({ position: 1.5 }), { time: 1, duration: 2 }).start_time, 3);
+});
+
+test('computeSfxPlayTime offset 作为附加微调秒数叠加', () => {
+  const r = computeSfxPlayTime(_sfx({ position: 0.25, offset: 0.5 }), { time: 4, duration: 4 });
+  assert.equal(r.start_time, 5.5);
+});
+
+test('computeSfxPlayTime 人工 manual 优先不被覆盖', () => {
+  const s = _sfx({ position: 0.9, position_source: 'manual', start_time: 7.3 });
+  const r = computeSfxPlayTime(s, { time: 10, duration: 4 });
+  assert.equal(r.start_time, 7.3);
+  assert.equal(r.position_source, 'manual');
+});
+
+test('computeSfxPlayTime 写回的 sfx 对象包含完整字段且 position 保留原值', () => {
+  const s = _sfx({ position: 0.4, anchor_text: '关门', anchor_mode: 'end', duration: 0.6 });
+  const r = computeSfxPlayTime(s, { time: 0, duration: 5 });
+  assert.equal(r.position, 0.4);
+  assert.equal(r.anchor_text, '关门');
+  assert.equal(r.anchor_mode, 'end');
+  assert.equal(r.duration, 0.6);
+  assert.equal(r.start_time, 2);
+  assert.equal(r.position_source, 'audio_aligned');
 });
