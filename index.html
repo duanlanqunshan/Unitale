@@ -5631,7 +5631,7 @@
                         };
 
                         for (let i = 0; i < tasks.length; i++) {
-                            const { line, lineNo } = taskList[i];
+                            const { line, lineNo } = tasks[i];
                             rawTtsExportStatus.value = `正在拉取台词 ${lineNo}/${tasks.length} 的原始音频...`;
                             let blob = null;
                             if (line.audioUrl) {
