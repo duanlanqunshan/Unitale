@@ -1209,7 +1209,8 @@
                     <div ref="scriptListContainer" class="space-y-3 max-h-[600px] overflow-y-auto px-2 pb-10">
                         <div v-for="(line, index) in scriptLines" :key="line.id" @click="toggleLineSelection(index, $event)"
                             :ref="el => { if (el) lineRefs[line.id] = el }"
-                            class="transition-all duration-200">
+                            class="transition-all duration-200 relative"
+                            :style="{ zIndex: 10000 - index }">
 
                             <!-- BGM 控制块 -->
                             <div v-if="line.type === 'bgm'"
@@ -1582,6 +1583,10 @@
                                                 class="ml-1 text-slate-400 hover:text-red-500 font-bold">×</button>
                                         </div>
                                         <!-- ★ 音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口） -->
+                                        <!-- 全局透明遮罩：点击外部任意区域立即收回弹层 -->
+                                        <div v-if="isSfxPickerOpen(line, sIdx)"
+                                            class="fixed inset-0 z-50 bg-transparent"
+                                            @click.stop="closeSfxPicker"></div>
                                         <div v-if="isSfxPickerOpen(line, sIdx)"
                                             :data-sfx-picker-key="`${line.id}-${sIdx}`"
                                             class="absolute z-[60] mt-2 bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
