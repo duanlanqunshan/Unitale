@@ -1552,7 +1552,7 @@
                                 <!-- 音效管理条 -->
                                 <div class="flex flex-wrap items-center gap-2 w-full">
 <div v-for="(sfx, sIdx) in line.sfx" :key="sIdx"
-                                        :class="['flex flex-col gap-1 border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
+                                        :class="['relative flex flex-col gap-1 border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
                                         <div class="flex items-center gap-1 min-w-0">
                                             <span class="mr-1" :title="getSfxSourceMeta(sfx.source).label">
                                                 {{ getSfxSourceMeta(sfx.source).emoji }}
@@ -1583,17 +1583,20 @@
                                         </div>
                                         <!-- ★ 音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口） -->
                                         <div v-if="isSfxPickerOpen(line, sIdx)"
-                                            class="absolute z-50 mt-1 bg-white border rounded-lg shadow-xl p-2 w-72 max-h-80 flex flex-col gap-2"
-                                            style="left: 0; top: 100%;">
+                                            :data-sfx-picker-key="`${line.id}-${sIdx}`"
+                                            class="absolute z-[60] mt-2 bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
+                                            style="left: 0; top: 100%;"
+                                            @click.stop>
                                             <div class="flex items-center gap-1">
                                                 <input type="text"
                                                     :value="sfxPicker.query"
                                                     @input="onSfxPickerQueryInput($event.target.value)"
                                                     @keyup.enter.prevent
                                                     @keydown.esc.prevent="closeSfxPicker"
+                                                    @click.stop
                                                     placeholder="搜索关键词 / 描述 / 文件名…"
                                                     class="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-blue-400 min-w-0"
-                                                    autofocus>
+                                                    ref="sfxPickerInput">
                                                 <button @click="closeSfxPicker" class="text-slate-400 hover:text-red-500 text-xs">×</button>
                                             </div>
                                             <div class="flex-1 overflow-y-auto text-xs border rounded bg-slate-50" style="max-height: 220px;">
@@ -2030,6 +2033,14 @@
                         results: filterSfxLibraryByQuery(initQuery),
                         loading: false
                     };
+                    // ★ 修复：Vue 下一帧 DOM 渲染完毕后，主动 focus 搜索框，
+                    //   避免 button click 后 button 仍持焦，弹层 autofocus 被浏览器拦截。
+                    setTimeout(() => {
+                        const el = document.querySelector(`[data-sfx-picker-key="${key}"] input[type="text"]`);
+                        if (el && typeof el.focus === 'function') {
+                            try { el.focus(); el.select(); } catch (e) {}
+                        }
+                    }, 0);
                 };
                 const closeSfxPicker = () => { sfxPicker.value = { openKey: null, query: '', results: [], loading: false }; };
                 const isSfxPickerOpen = (line, sfxIdx) => sfxPicker.value.openKey === `${line.id}-${sfxIdx}`;
@@ -3999,6 +4010,19 @@
                     if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
                     console.log(`正在同步音色文件到服务器: ${baseUrl}`);
 
+                    // ★ 工单优化：cloudflare 临时域名 / 内网未互通时第一次 check 就失败，
+                    //   后续十几个 timbre 反复失败会把控制台刷红，掩盖真正重要的日志。
+                    //   先做一次轻量探测，不可达直接整段跳过，不要再逐个试。
+                    let serverReachable = true;
+                    try {
+                        const probeRes = await fetch(`${baseUrl}/v1/check/audio?file_name=__probe__`, { signal: AbortSignal.timeout(3000) });
+                        if (!probeRes.ok) serverReachable = false;
+                    } catch (e) {
+                        serverReachable = false;
+                        console.warn(`[syncTimbres] TTS 服务器不可达，跳过音色同步：${baseUrl}`, e?.name || e);
+                    }
+                    if (!serverReachable) return;
+
                     for (const t of timbres.value) {
                         if (!t.refPath) continue;
 
@@ -4869,21 +4893,33 @@
                             isAuditioningId.value = line.id;
 
                             // 3. Prepare loading promises
+                            const { resolveSfxPlaybackUrl } = await unitaleLogicPromise;
                             const loadSfx = async () => {
                                 if (!line.sfx || line.sfx.length === 0) return [];
                                 const promises = line.sfx.map(async (sfxItem) => {
                                     const sfxLibItem = sfxLibrary.value.find(s => s.name === sfxItem.name);
-                                    if (sfxLibItem && sfxLibItem.filename) {
-                                        const buf = await loadAudioBuffer(sfxLibItem.filename);
-                                        if (buf) return { 
-                                            buffer: buf, 
-                                            item: sfxItem, 
-                                            libVolume: sfxLibItem.volume ?? 1.0,
-                                            trimStart: sfxLibItem.trimStart ?? 0,
-                                            trimEnd: sfxLibItem.trimEnd ?? 1,
-                                            isAmbient: sfxLibItem.isAmbient ?? false
-                                        };
-                                    }
+                                    // ★ 修复：本地扫描子路径音效 / 手动绑定音效必须经 resolveSfxPlaybackUrl
+                                    //   转译为 /v1/sfx/local_file?... 或 assetKey（localFileMap 命中），
+                                    //   不能直接 fetch 原始 filename，否则主混音里听不到音效。
+                                    const candidate = sfxLibItem || {
+                                        name: sfxItem.name,
+                                        filename: sfxItem.filename,
+                                        source: sfxItem.source,
+                                        scanRoot: sfxItem.scanRoot
+                                    };
+                                    const playbackUrl = (candidate && candidate.filename)
+                                        ? (resolveSfxPlaybackUrl(candidate) || candidate.filename)
+                                        : null;
+                                    if (!playbackUrl) return null;
+                                    const buf = await loadAudioBuffer(playbackUrl);
+                                    if (buf) return { 
+                                        buffer: buf, 
+                                        item: sfxItem, 
+                                        libVolume: sfxLibItem?.volume ?? 1.0,
+                                        trimStart: sfxLibItem?.trimStart ?? 0,
+                                        trimEnd: sfxLibItem?.trimEnd ?? 1,
+                                        isAmbient: sfxLibItem?.isAmbient ?? false
+                                    };
                                     return null;
                                 });
                                 const results = await Promise.all(promises);
