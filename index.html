@@ -1583,49 +1583,52 @@
                                                 class="ml-1 text-slate-400 hover:text-red-500 font-bold">×</button>
                                         </div>
                                         <!-- ★ 音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口） -->
-                                        <!-- 全局透明遮罩：点击外部任意区域立即收回弹层 -->
-                                        <div v-if="isSfxPickerOpen(line, sIdx)"
-                                            class="fixed inset-0 z-[99998] bg-transparent"
-                                            @click.stop="closeSfxPicker"></div>
-                                        <div v-if="isSfxPickerOpen(line, sIdx)"
-                                            :data-sfx-picker-key="`${line.id}-${sIdx}`"
-                                            class="fixed z-[99999] bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
-                                            :style="{ left: (sfxPicker.pos?.left || 0) + 'px', top: (sfxPicker.pos?.top || 0) + 'px', backgroundColor: '#ffffff' }"
-                                            @click.stop>
-                                            <div class="flex items-center gap-1">
-                                                <input type="text"
-                                                    :value="sfxPicker.query"
-                                                    @input="onSfxPickerQueryInput($event.target.value)"
-                                                    @keyup.enter.prevent
-                                                    @keydown.esc.prevent="closeSfxPicker"
-                                                    @click.stop
-                                                    placeholder="搜索关键词 / 描述 / 文件名…"
-                                                    class="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-blue-400 min-w-0"
-                                                    ref="sfxPickerInput">
-                                                <button @click="closeSfxPicker" class="text-slate-400 hover:text-red-500 text-xs">×</button>
-                                            </div>
-                                            <div class="flex-1 overflow-y-auto text-xs border rounded bg-slate-50" style="max-height: 220px;">
-                                                <div v-if="sfxPicker.loading" class="p-2 text-slate-400 text-center">远程搜索中…</div>
-                                                <div v-else-if="sfxPicker.results.length === 0" class="p-2 text-slate-400 text-center">
-                                                    无匹配候选，试试关键词，或手动上传文件 ↓
+                                        <!-- 用 Teleport 挂到 body 上,绕开 #app 的 backdrop-filter 降级 fixed 的陷阱 -->
+                                        <teleport to="body">
+                                            <!-- 全局透明遮罩：点击外部任意区域立即收回弹层 -->
+                                            <div v-if="isSfxPickerOpen(line, sIdx)"
+                                                class="fixed inset-0 z-[99998] bg-transparent"
+                                                @click.stop="closeSfxPicker"></div>
+                                            <div v-if="isSfxPickerOpen(line, sIdx)"
+                                                :data-sfx-picker-key="`${line.id}-${sIdx}`"
+                                                class="fixed z-[99999] bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
+                                                :style="{ left: (sfxPicker.pos?.left || 0) + 'px', top: (sfxPicker.pos?.top || 0) + 'px', backgroundColor: '#ffffff' }"
+                                                @click.stop>
+                                                <div class="flex items-center gap-1">
+                                                    <input type="text"
+                                                        :value="sfxPicker.query"
+                                                        @input="onSfxPickerQueryInput($event.target.value)"
+                                                        @keyup.enter.prevent
+                                                        @keydown.esc.prevent="closeSfxPicker"
+                                                        @click.stop
+                                                        placeholder="搜索关键词 / 描述 / 文件名…"
+                                                        class="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-blue-400 min-w-0"
+                                                        ref="sfxPickerInput">
+                                                    <button @click="closeSfxPicker" class="text-slate-400 hover:text-red-500 text-xs">×</button>
                                                 </div>
-                                                <button v-for="r in sfxPicker.results" :key="r.name + r.filename"
-                                                    @click="pickSfxFromPicker(line, sIdx, r)"
-                                                    class="block w-full text-left p-2 hover:bg-blue-50 border-b border-slate-100">
-                                                    <div class="flex items-center justify-between gap-2">
-                                                        <span class="font-medium truncate">{{ r.name }}</span>
-                                                        <span class="text-[10px] text-slate-400 shrink-0">{{ r.source || 'local' }}</span>
+                                                <div class="flex-1 overflow-y-auto text-xs border rounded bg-slate-50" style="max-height: 220px;">
+                                                    <div v-if="sfxPicker.loading" class="p-2 text-slate-400 text-center">远程搜索中…</div>
+                                                    <div v-else-if="sfxPicker.results.length === 0" class="p-2 text-slate-400 text-center">
+                                                        无匹配候选，试试关键词，或手动上传文件 ↓
                                                     </div>
-                                                    <div class="text-[10px] text-slate-400 truncate">{{ r.description || r.filename || '' }}</div>
-                                                </button>
+                                                    <button v-for="r in sfxPicker.results" :key="r.name + r.filename"
+                                                        @click="pickSfxFromPicker(line, sIdx, r)"
+                                                        class="block w-full text-left p-2 hover:bg-blue-50 border-b border-slate-100">
+                                                        <div class="flex items-center justify-between gap-2">
+                                                            <span class="font-medium truncate">{{ r.name }}</span>
+                                                            <span class="text-[10px] text-slate-400 shrink-0">{{ r.source || 'local' }}</span>
+                                                        </div>
+                                                        <div class="text-[10px] text-slate-400 truncate">{{ r.description || r.filename || '' }}</div>
+                                                    </button>
+                                                </div>
+                                                <!-- 手动上传入口：所有 chip 都能用，不再只限未匹配 -->
+                                                <label class="flex items-center justify-center gap-1 border-t pt-2 text-emerald-600 hover:text-emerald-700 cursor-pointer text-xs">
+                                                    📁 手动选择本地音频文件
+                                                    <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac"
+                                                        class="hidden" @change="bindUploadedSfx(sfx, $event); closeSfxPicker()">
+                                                </label>
                                             </div>
-                                            <!-- 手动上传入口：所有 chip 都能用，不再只限未匹配 -->
-                                            <label class="flex items-center justify-center gap-1 border-t pt-2 text-emerald-600 hover:text-emerald-700 cursor-pointer text-xs">
-                                                📁 手动选择本地音频文件
-                                                <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac"
-                                                    class="hidden" @change="bindUploadedSfx(sfx, $event); closeSfxPicker()">
-                                            </label>
-                                        </div>
+                                        </teleport>
                                     </div>
                                     <button @click="addLineSfx(line)"
                                         class="text-[10px] text-slate-400 hover:text-blue-600 border border-dashed border-slate-300 rounded px-2 py-1 hover:border-blue-400 transition-colors flex items-center gap-1">+
