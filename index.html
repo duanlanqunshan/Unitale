@@ -1553,7 +1553,7 @@
                                 <!-- 音效管理条 -->
                                 <div class="flex flex-wrap items-center gap-2 w-full">
 <div v-for="(sfx, sIdx) in line.sfx" :key="sIdx"
-                                        :class="['relative flex flex-col gap-1 border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
+                                        :class="['relative isolate flex flex-col gap-1 border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
                                         <div class="flex items-center gap-1 min-w-0">
                                             <span class="mr-1" :title="getSfxSourceMeta(sfx.source).label">
                                                 {{ getSfxSourceMeta(sfx.source).emoji }}
@@ -1561,7 +1561,7 @@
                                             <span v-if="sfxLibrary.find(lib => lib.name === sfx.name)?.isAmbient"
                                                 class="mr-1 text-base leading-none" title="环境持续音 Ambient（贯穿整句，淡入淡出）">🌀</span>
                                             <!-- ★ 工单优化：点击 chip 名直接打开搜索弹层，已匹配/未匹配都能更换 -->
-                                            <button @click="openSfxPicker(line, sIdx)"
+                                            <button @click="openSfxPicker(line, sIdx, $event)"
                                                 class="bg-transparent outline-none border-b border-transparent hover:border-current font-medium min-w-0 flex-1 text-left truncate"
                                                 :class="!sfx.name ? 'text-slate-400 italic' : ''"
                                                 :title="!sfx.name ? '点击选择音效' : (sfx.source === 'unmatched' ? '未匹配，点击重新选择' : '点击更换音效')">
@@ -1585,12 +1585,12 @@
                                         <!-- ★ 音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口） -->
                                         <!-- 全局透明遮罩：点击外部任意区域立即收回弹层 -->
                                         <div v-if="isSfxPickerOpen(line, sIdx)"
-                                            class="fixed inset-0 z-50 bg-transparent"
+                                            class="fixed inset-0 z-[99998] bg-transparent"
                                             @click.stop="closeSfxPicker"></div>
                                         <div v-if="isSfxPickerOpen(line, sIdx)"
                                             :data-sfx-picker-key="`${line.id}-${sIdx}`"
-                                            class="absolute z-[60] mt-2 bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
-                                            style="left: 0; top: 100%;"
+                                            class="fixed z-[99999] bg-white border rounded-lg shadow-2xl p-2 w-72 max-h-80 flex flex-col gap-2"
+                                            :style="{ left: (sfxPicker.pos?.left || 0) + 'px', top: (sfxPicker.pos?.top || 0) + 'px', backgroundColor: '#ffffff' }"
                                             @click.stop>
                                             <div class="flex items-center gap-1">
                                                 <input type="text"
@@ -2027,16 +2027,28 @@
                 };
 
                 // 打开弹层并初始化候选（默认显示当前已入库的全部 sfxLibrary 条目）
-                const openSfxPicker = (line, sfxIdx) => {
+                // ★ 工单优化：改用 fixed 定位 + chip 元素 boundingRect 计算位置，
+                //   完全脱离台词行 DOM 层叠上下文，绝不被下层行文字穿透遮挡。
+                const openSfxPicker = (line, sfxIdx, evt) => {
                     const key = `${line.id}-${sfxIdx}`;
                     const initQuery = (line.sfx[sfxIdx]?.unmatchedHint && line.sfx[sfxIdx].unmatchedHint !== '请选择音效或输入关键词')
                         ? line.sfx[sfxIdx].unmatchedHint
                         : (line.sfx[sfxIdx]?.name || '');
+                    // 计算触发按钮在视口中的位置，弹层贴在它下方
+                    let pos = { left: 0, top: 0, width: 288 };
+                    try {
+                        const target = (evt && evt.currentTarget) || (evt && evt.target) || null;
+                        if (target && typeof target.getBoundingClientRect === 'function') {
+                            const r = target.getBoundingClientRect();
+                            pos = { left: r.left, top: r.bottom + 4, width: Math.max(288, r.width) };
+                        }
+                    } catch (e) {}
                     sfxPicker.value = {
                         openKey: key,
                         query: initQuery,
                         results: filterSfxLibraryByQuery(initQuery),
-                        loading: false
+                        loading: false,
+                        pos
                     };
                     // ★ 修复：Vue 下一帧 DOM 渲染完毕后，主动 focus 搜索框，
                     //   避免 button click 后 button 仍持焦，弹层 autofocus 被浏览器拦截。
