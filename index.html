@@ -1551,43 +1551,73 @@
 
                                 <!-- 音效管理条 -->
                                 <div class="flex flex-wrap items-center gap-2 w-full">
-                                    <div v-for="(sfx, sIdx) in line.sfx" :key="sIdx"
-                                        :class="['flex items-center border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
-                                        <span class="mr-1" :title="getSfxSourceMeta(sfx.source).label">
-                                            {{ getSfxSourceMeta(sfx.source).emoji }}
-                                        </span>
-                                        <span v-if="sfxLibrary.find(lib => lib.name === sfx.name)?.isAmbient"
-                                            class="mr-1 text-base leading-none" title="环境持续音 Ambient（贯穿整句，淡入淡出）">🌀</span>
-                                         <input :value="sfx.name" @change="handleSfxNameChange(sfx, $event.target.value)"
-                                             :list="'sfx-options-' + line.id + '-' + sIdx"
-                                             class="bg-transparent outline-none border-b border-transparent hover:border-current font-medium w-36 min-w-0"
-                                             :title="sfx.source === 'unmatched' ? '未匹配需求名称，可编辑后重新匹配' : '可输入名称或从音效库选择'">
-                                         <datalist :id="'sfx-options-' + line.id + '-' + sIdx">
-                                             <option v-for="libSfx in sfxLibrary" :key="libSfx.id" :value="libSfx.name"></option>
-                                         </datalist>
-                                          <button @click="previewLineSfx(sfx)"
-                                              :disabled="!canPreviewSfx(sfx)"
-                                              class="ml-1 text-slate-500 hover:text-green-600 disabled:opacity-30 disabled:cursor-not-allowed"
-                                              :title="canPreviewSfx(sfx) ? '单独试听此音效素材' : '尚无可播放素材，请先重新匹配或手动入库'">🔊</button>
-                                         <span class="mx-1 text-slate-400">@</span>
-                                        <input type="number" v-model="sfx.position" step="0.1" min="0" max="1"
-                                            class="w-10 bg-transparent text-center outline-none border-b border-transparent hover:border-current"
-                                            title="插入位置 (0.0 - 1.0)">
-                                        <button v-if="sfx.source === 'unmatched' || sfx.unmatchedHint"
-                                            @click="retrySingleSfx(line, sIdx)"
-                                            class="ml-1 text-slate-500 hover:text-blue-600 font-bold"
-                                            title="单独重新匹配此音效（LLM 兜底 + Freesound 在线检索）">🔁</button>
-                                        <!-- ★ 未匹配音效手动绑定：用户可上传本地音频或从扫描目录挑一个文件，
-                                             立即把这条 unmatched chip 变成可播放状态。 -->
-                                        <label v-if="sfx.source === 'unmatched' || sfx.unmatchedHint"
-                                            class="ml-1 text-slate-500 hover:text-emerald-600 font-bold cursor-pointer"
-                                            title="手动绑定：从本地选一个音频文件，直接关联到此未匹配音效">
-                                            📁
-                                            <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac"
-                                                class="hidden" @change="bindUploadedSfx(sfx, $event)">
-                                        </label>
-                                        <button @click="removeLineSfx(line, sIdx)"
-                                            class="ml-2 text-slate-400 hover:text-red-500 font-bold">×</button>
+<div v-for="(sfx, sIdx) in line.sfx" :key="sIdx"
+                                        :class="['flex flex-col gap-1 border rounded px-2 py-1 text-xs', getSfxSourceMeta(sfx.source).cls]">
+                                        <div class="flex items-center gap-1 min-w-0">
+                                            <span class="mr-1" :title="getSfxSourceMeta(sfx.source).label">
+                                                {{ getSfxSourceMeta(sfx.source).emoji }}
+                                            </span>
+                                            <span v-if="sfxLibrary.find(lib => lib.name === sfx.name)?.isAmbient"
+                                                class="mr-1 text-base leading-none" title="环境持续音 Ambient（贯穿整句，淡入淡出）">🌀</span>
+                                            <!-- ★ 工单优化：点击 chip 名直接打开搜索弹层，已匹配/未匹配都能更换 -->
+                                            <button @click="openSfxPicker(line, sIdx)"
+                                                class="bg-transparent outline-none border-b border-transparent hover:border-current font-medium min-w-0 flex-1 text-left truncate"
+                                                :class="!sfx.name ? 'text-slate-400 italic' : ''"
+                                                :title="!sfx.name ? '点击选择音效' : (sfx.source === 'unmatched' ? '未匹配，点击重新选择' : '点击更换音效')">
+                                                {{ sfx.name || '点击选择音效…' }}
+                                            </button>
+                                            <button @click="previewLineSfx(sfx)"
+                                                :disabled="!canPreviewSfx(sfx)"
+                                                class="ml-1 text-slate-500 hover:text-green-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                                                :title="canPreviewSfx(sfx) ? '单独试听此音效素材' : '尚无可播放素材，请先选择或手动入库'">🔊</button>
+                                            <span class="mx-1 text-slate-400">@</span>
+                                            <input type="number" v-model="sfx.position" step="0.1" min="0" max="1"
+                                                class="w-12 bg-transparent text-center outline-none border-b border-transparent hover:border-current"
+                                                title="插入位置 (0.0台词开始 - 1.0台词结束)">
+                                            <button v-if="sfx.source === 'unmatched' || sfx.unmatchedHint"
+                                                @click="retrySingleSfx(line, sIdx)"
+                                                class="ml-1 text-slate-500 hover:text-blue-600 font-bold"
+                                                title="单独重新匹配此音效（LLM 兜底 + Freesound 在线检索）">🔁</button>
+                                            <button @click="removeLineSfx(line, sIdx)"
+                                                class="ml-1 text-slate-400 hover:text-red-500 font-bold">×</button>
+                                        </div>
+                                        <!-- ★ 音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口） -->
+                                        <div v-if="isSfxPickerOpen(line, sIdx)"
+                                            class="absolute z-50 mt-1 bg-white border rounded-lg shadow-xl p-2 w-72 max-h-80 flex flex-col gap-2"
+                                            style="left: 0; top: 100%;">
+                                            <div class="flex items-center gap-1">
+                                                <input type="text"
+                                                    :value="sfxPicker.query"
+                                                    @input="onSfxPickerQueryInput($event.target.value)"
+                                                    @keyup.enter.prevent
+                                                    @keydown.esc.prevent="closeSfxPicker"
+                                                    placeholder="搜索关键词 / 描述 / 文件名…"
+                                                    class="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-blue-400 min-w-0"
+                                                    autofocus>
+                                                <button @click="closeSfxPicker" class="text-slate-400 hover:text-red-500 text-xs">×</button>
+                                            </div>
+                                            <div class="flex-1 overflow-y-auto text-xs border rounded bg-slate-50" style="max-height: 220px;">
+                                                <div v-if="sfxPicker.loading" class="p-2 text-slate-400 text-center">远程搜索中…</div>
+                                                <div v-else-if="sfxPicker.results.length === 0" class="p-2 text-slate-400 text-center">
+                                                    无匹配候选，试试关键词，或手动上传文件 ↓
+                                                </div>
+                                                <button v-for="r in sfxPicker.results" :key="r.name + r.filename"
+                                                    @click="pickSfxFromPicker(line, sIdx, r)"
+                                                    class="block w-full text-left p-2 hover:bg-blue-50 border-b border-slate-100">
+                                                    <div class="flex items-center justify-between gap-2">
+                                                        <span class="font-medium truncate">{{ r.name }}</span>
+                                                        <span class="text-[10px] text-slate-400 shrink-0">{{ r.source || 'local' }}</span>
+                                                    </div>
+                                                    <div class="text-[10px] text-slate-400 truncate">{{ r.description || r.filename || '' }}</div>
+                                                </button>
+                                            </div>
+                                            <!-- 手动上传入口：所有 chip 都能用，不再只限未匹配 -->
+                                            <label class="flex items-center justify-center gap-1 border-t pt-2 text-emerald-600 hover:text-emerald-700 cursor-pointer text-xs">
+                                                📁 手动选择本地音频文件
+                                                <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac"
+                                                    class="hidden" @change="bindUploadedSfx(sfx, $event); closeSfxPicker()">
+                                            </label>
+                                        </div>
                                     </div>
                                     <button @click="addLineSfx(line)"
                                         class="text-[10px] text-slate-400 hover:text-blue-600 border border-dashed border-slate-300 rounded px-2 py-1 hover:border-blue-400 transition-colors flex items-center gap-1">+
@@ -1965,6 +1995,118 @@
                 const sfxScanRootStatus = ref('');
                 const isScanningLocal = ref(false);
                 const scannedSfxItems = ref([]);
+
+                // ★ 工单优化：chip 上的音效选择弹层（关键词搜索 + 滚动列表 + 手动上传入口）
+                // 一个时间只展开一个弹层。key 形如 `${lineId}-${sfxIdx}`，results 是过滤后的候选。
+                const sfxPicker = ref({ openKey: null, query: '', results: [], loading: false });
+
+                // 工单优化：调用后端 /v1/sfx/search_local 做扫描目录模糊搜索，
+                // 命中本地扫描文件后直接入库（避免用户先去音效管理页手动批量导入再回来挑）。
+                const searchLocalSfxSafe = async (keyword) => {
+                    if (!keyword || keyword.trim().length < 1) return [];
+                    try {
+                        const fd = new FormData();
+                        fd.append('keyword', keyword.trim());
+                        if (sfxScanRootPath.value.trim()) fd.append('root_path', sfxScanRootPath.value.trim());
+                        const resp = await fetch('/v1/sfx/search_local', { method: 'POST', body: fd });
+                        if (!resp.ok) return [];
+                        const data = await resp.json();
+                        return Array.isArray(data?.items) ? data.items : [];
+                    } catch (e) {
+                        console.warn('[sfxPicker] search_local 请求失败', e);
+                        return [];
+                    }
+                };
+
+                // 打开弹层并初始化候选（默认显示当前已入库的全部 sfxLibrary 条目）
+                const openSfxPicker = (line, sfxIdx) => {
+                    const key = `${line.id}-${sfxIdx}`;
+                    const initQuery = (line.sfx[sfxIdx]?.unmatchedHint && line.sfx[sfxIdx].unmatchedHint !== '请选择音效或输入关键词')
+                        ? line.sfx[sfxIdx].unmatchedHint
+                        : (line.sfx[sfxIdx]?.name || '');
+                    sfxPicker.value = {
+                        openKey: key,
+                        query: initQuery,
+                        results: filterSfxLibraryByQuery(initQuery),
+                        loading: false
+                    };
+                };
+                const closeSfxPicker = () => { sfxPicker.value = { openKey: null, query: '', results: [], loading: false }; };
+                const isSfxPickerOpen = (line, sfxIdx) => sfxPicker.value.openKey === `${line.id}-${sfxIdx}`;
+
+                // 前端过滤：从已入库 sfxLibrary 中按关键词命中 name/description
+                const filterSfxLibraryByQuery = (q) => {
+                    const query = String(q || '').trim().toLowerCase();
+                    const all = sfxLibrary.value.filter(s => s && s.name && s.filename);
+                    if (!query) return all.slice(0, 30);
+                    return all.filter(s => {
+                        const n = String(s.name).toLowerCase();
+                        const d = String(s.description || '').toLowerCase();
+                        return n.includes(query) || d.includes(query) || query.includes(n);
+                    }).slice(0, 30);
+                };
+
+                // 用户在弹层搜索框输入：本地过滤 + 后端搜索（防抖 250ms）
+                let sfxPickerSearchTimer = null;
+                const onSfxPickerQueryInput = (val) => {
+                    sfxPicker.value.query = val;
+                    sfxPicker.value.results = filterSfxLibraryByQuery(val);
+                    if (sfxPickerSearchTimer) clearTimeout(sfxPickerSearchTimer);
+                    sfxPickerSearchTimer = setTimeout(async () => {
+                        if (!val || val.trim().length < 2) return;
+                        sfxPicker.value.loading = true;
+                        const remote = await searchLocalSfxSafe(val);
+                        sfxPicker.value.loading = false;
+                        // 合并远程结果（去重，远程结果会自动入库到 sfxLibrary 并刷新一次）
+                        if (remote && remote.length > 0) {
+                            const existNames = new Set(sfxPicker.value.results.map(r => r.name));
+                            const merged = [...sfxPicker.value.results];
+                            for (const r of remote.slice(0, 10)) {
+                                if (!existNames.has(r.name)) {
+                                    merged.push({
+                                        name: r.name,
+                                        filename: r.path,
+                                        source: 'local_scan',
+                                        scanRoot: sfxScanRootPath.value.trim(),
+                                        description: `本地扫描：${(r.tags || []).join('/') || '根目录'}`
+                                    });
+                                    existNames.add(r.name);
+                                }
+                            }
+                            sfxPicker.value.results = merged.slice(0, 30);
+                        }
+                    }, 250);
+                };
+
+                // 用户在弹层选中一个候选，写回 sfx 项（已匹配 source='local'/'local_scan'）
+                const pickSfxFromPicker = (line, sfxIdx, libItem) => {
+                    const s = line.sfx[sfxIdx];
+                    if (!s) return;
+                    s.name = libItem.name;
+                    s.source = libItem.source === 'local_scan' ? 'local_scan' : 'local';
+                    s.lastQuery = libItem.name;
+                    s.unmatchedHint = null;
+                    // 把库识别字段同步上来，exportAudio / preview 都能直接用 self-describe fallback
+                    s.filename = libItem.filename;
+                    if (libItem.scanRoot) s.scanRoot = libItem.scanRoot;
+                    else if ('scanRoot' in s) delete s.scanRoot;
+                    if ('isAmbient' in libItem) s.isAmbient = libItem.isAmbient;
+                    // 如果该库条目还未入库，push 进 sfxLibrary 以便其他台词也能复用
+                    if (!sfxLibrary.value.find(l => l.name === libItem.name)) {
+                        sfxLibrary.value.push({
+                            id: `sfx_${Date.now()}`,
+                            name: libItem.name,
+                            description: libItem.description || '',
+                            filename: libItem.filename,
+                            source: libItem.source || s.source,
+                            scanRoot: libItem.scanRoot || '',
+                            trimStart: 0, trimEnd: 1, volume: 0.3, enabled: true
+                        });
+                        saveSfxToLocal();
+                    }
+                    closeSfxPicker();
+                    triggerAutoSave();
+                };
 
                 // Phase 9：Freesound 在线下载音效保存目录（可前端手动修改）
                 const sfxSaveDir = ref(localStorage.getItem('unitale_sfxSaveDir') || '');
@@ -2580,6 +2722,11 @@
                             } else {
                                 throw new Error('Absolute path not under static mount');
                             }
+                        } else if (filename.startsWith('/v1/') || filename.startsWith('/api/')) {
+                            // 后端 API 路径（如 /v1/sfx/local_file?rel_path=...&root_path=...），同源直接 fetch。
+                            const res = await fetch(filename);
+                            if (!res.ok) throw new Error(`API ${filename} returned ${res.status}`);
+                            arrayBuffer = await res.arrayBuffer();
                         } else {
                             // 兜底：尝试从本地相对路径（如 voice 目录）加载
                             try {
@@ -5723,20 +5870,27 @@
                         });
                         for (const entry of usedSfx) {
                             const { name, filename, source } = entry;
-                            if (!filename) continue;
+                            if (!filename) {
+                                console.warn(`[exportSfx] 跳过无 filename 条目：${name}`);
+                                continue;
+                            }
                             // ★ entry.scanRoot 优先，缺失时回退到全局 sfxScanRootPath（onMounted 已自动从后端拉取）
                             const scanRoot = entry.scanRoot || sfxScanRootPath.value || '';
                             try {
                                 // resolveSfxPlaybackUrl 需要对象形式 item={filename, source, scanRoot}
+                                // 手动绑定音效 source='local' 且 filename=assetKey，会走 fallback 直接返回 assetKey，
+                                // 由 loadAudioBuffer 从 localFileMap / IndexedDB 取出。
                                 const playbackUrl = resolveSfxPlaybackUrl({ filename, source, scanRoot }) || filename;
+                                console.log(`[exportSfx] 加载 ${name}: source=${source} filename=${filename} scanRoot=${scanRoot} -> url=${playbackUrl}`);
                                 const buf = await loadAudioBuffer(playbackUrl);
                                 if (buf) {
                                     assets.sfx[name] = buf;
+                                    console.log(`[exportSfx] ✓ ${name} buffer=${buf.duration.toFixed(2)}s ch=${buf.numberOfChannels}`);
                                 } else {
-                                    console.warn(`[exportSfx] 加载音效失败（返回空 buffer）：${name} filename=${filename} url=${playbackUrl} scanRoot=${scanRoot}`);
+                                    console.warn(`[exportSfx] 加载音效失败（返回空 buffer）：${name} filename=${filename} url=${playbackUrl} scanRoot=${scanRoot} source=${source}`);
                                 }
                             } catch (e) {
-                                console.warn(`[exportSfx] 加载音效异常：${name}`, e);
+                                console.warn(`[exportSfx] 加载音效异常：${name} filename=${filename} source=${source} scanRoot=${scanRoot}`, e);
                             }
                         }
 
@@ -6347,8 +6501,15 @@
 
                 const addLineSfx = (line) => {
                     if (!line.sfx) line.sfx = [];
-                    const defaultSfx = sfxLibrary.value.length > 0 ? sfxLibrary.value[0].name : 'New SFX';
-                    line.sfx.push({ name: defaultSfx, position: 0.5, source: 'local', lastQuery: defaultSfx, unmatchedHint: null });
+                    // ★ 工单优化：新增音效默认空名 + unmatched 状态，强制用户从待选列表挑一个，
+                    // 避免误以为"已匹配首个库音效"，也保证用户必须做出选择才参与渲染。
+                    line.sfx.push({
+                        name: '',
+                        position: 0.5,
+                        source: 'unmatched',
+                        lastQuery: '',
+                        unmatchedHint: '请选择音效或输入关键词'
+                    });
                 };
 
                 const handleSfxNameChange = async (sfx, nextName) => {
@@ -6375,6 +6536,7 @@
                 };
 
                 const canPreviewSfx = (sfx) => {
+                    if (!sfx || !sfx.name) return false;
                     const libraryItem = sfxLibrary.value.find(lib => lib.name === sfx.name && lib.filename);
                     return !!(libraryItem?.filename || (sfx?.filename && sfx?.scanRoot));
                 };
@@ -7765,6 +7927,9 @@ ${JSON.stringify(segmentPayload)}
                     addLineSfx, removeLineSfx,
                     retrySingleSfx, bindUploadedSfx, getSfxSourceMeta,
                     unmatchedSfxCount,
+                    // ★ 工单优化：chip 选择弹层
+                    sfxPicker, openSfxPicker, closeSfxPicker, isSfxPickerOpen,
+                    onSfxPickerQueryInput, pickSfxFromPicker,
 
                     // BGM Actions
                     bgmLibrary, bgmForm, isEditingBgm,
