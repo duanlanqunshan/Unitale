@@ -281,7 +281,14 @@
                             placeholder="http://127.0.0.1:8300">
                     </div>
                 </div>
-                <div class="flex gap-2">
+                <div class="flex items-center gap-2 mt-3">
+                    <input type="checkbox" id="tts-supports-qwen" v-model="ttsForm.supportsQwen"
+                        class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                    <label for="tts-supports-qwen" class="text-xs text-slate-600 select-none cursor-pointer">
+                        支持 Qwen 音色设计（关闭后隐藏 Qwen 生成按钮）
+                    </label>
+                </div>
+                <div class="flex gap-2 mt-3">
                     <button type="button" @click.prevent="saveTtsConfig"
                         class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all">保存配置</button>
                     <button type="button" v-if="isEditingTts" @click="resetTtsForm"
@@ -296,6 +303,12 @@
                     <div>
                         <div class="font-bold text-slate-800 text-sm">{{ conf.name }}</div>
                         <div class="text-xs text-slate-400 mt-1">{{ conf.baseUrl }}</div>
+                        <div class="mt-1">
+                            <span class="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold"
+                                :class="conf.supportsQwen ? 'bg-pink-100 text-pink-700' : 'bg-slate-100 text-slate-500'">
+                                {{ conf.supportsQwen ? 'Qwen 音色' : '仅合成' }}
+                            </span>
+                        </div>
                     </div>
                     <div class="flex gap-2">
                         <button @click="editTtsConfig(conf)"
@@ -1079,10 +1092,14 @@
                                         :class="['flex-1 px-2 py-1.5 border rounded text-[10px] font-bold transition-colors flex justify-center items-center gap-1', char.isAnalyzing ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' : 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100']">
                                         <span v-if="char.isAnalyzing" class="animate-spin">⏳</span>{{ char.isAnalyzing ? '停止分析' : 'AI分析音色' }}
                                     </button>
-                                    <button @click="generateQwenVoice(char)"
-                                        :class="['flex-1 px-2 py-1.5 border rounded text-[10px] font-bold transition-colors flex justify-center items-center gap-1', char.isGeneratingVoice ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' : 'bg-pink-50 text-pink-600 border-pink-100 hover:bg-pink-100']">
-                                        <span v-if="char.isGeneratingVoice" class="animate-spin">⏳</span>{{ char.isGeneratingVoice ? '停止生成' : 'Qwen生成音色' }}
-                                    </button>
+                                     <button @click="generateQwenVoice(char)"
+                                         :disabled="!currentTtsConfig?.supportsQwen"
+                                         :title="!currentTtsConfig?.supportsQwen ? '当前 TTS 服务不支持 Qwen 音色设计' : ''"
+                                         :class="['flex-1 px-2 py-1.5 border rounded text-[10px] font-bold transition-colors flex justify-center items-center gap-1',
+                                            !currentTtsConfig?.supportsQwen ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50' :
+                                            char.isGeneratingVoice ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' : 'bg-pink-50 text-pink-600 border-pink-100 hover:bg-pink-100']">
+                                         <span v-if="char.isGeneratingVoice" class="animate-spin">⏳</span>{{ char.isGeneratingVoice ? '停止生成' : 'Qwen生成音色' }}
+                                     </button>
                                 </div>
                             </div>
                         </div>
@@ -1985,7 +2002,7 @@
 
                 // TTS 配置状态
                 const ttsConfigs = ref([]);
-                const ttsForm = ref({ id: '', name: '', baseUrl: '' });
+                const ttsForm = ref({ id: '', name: '', baseUrl: '', supportsQwen: true });
                 const isEditingTts = ref(false);
 
                 // LLM 兜底匹配配置（Phase 2：音效匹配失败时的智能重定向）
@@ -3070,8 +3087,14 @@
                      }
  
                      // 读取 TTS 配置
-                     const savedTts = localStorage.getItem('storyforge_tts_configs');
-                     if (savedTts) ttsConfigs.value = JSON.parse(savedTts);
+                    const savedTts = localStorage.getItem('storyforge_tts_configs');
+                    if (savedTts) {
+                        const parsed = JSON.parse(savedTts);
+                        ttsConfigs.value = parsed.map(c => ({
+                            supportsQwen: true,
+                            ...c,
+                        }));
+                    }
  
                      const savedTtsId = localStorage.getItem('unitale_ttsConfigId');
                      if (savedTtsId && ttsConfigs.value.some(c => c.id === savedTtsId)) {
@@ -3332,11 +3355,13 @@
 
                     ttsForm.value.baseUrl = ttsForm.value.baseUrl.trim();
 
+                    const configToSave = { ...ttsForm.value };
                     if (isEditingTts.value) {
-                        const index = ttsConfigs.value.findIndex(c => c.id === ttsForm.value.id);
-                        if (index !== -1) ttsConfigs.value[index] = { ...ttsForm.value };
+                        const index = ttsConfigs.value.findIndex(c => c.id === configToSave.id);
+                        if (index !== -1) ttsConfigs.value[index] = configToSave;
                     } else {
-                        ttsConfigs.value.push({ ...ttsForm.value, id: Date.now().toString() });
+                        configToSave.id = Date.now().toString();
+                        ttsConfigs.value.push(configToSave);
                     }
 
                     saveTtsConfigsToLocal();
@@ -3344,7 +3369,7 @@
                 };
 
                 const editTtsConfig = (conf) => {
-                    ttsForm.value = { ...conf };
+                    ttsForm.value = { supportsQwen: true, ...conf };
                     isEditingTts.value = true;
                 };
 
@@ -3355,7 +3380,7 @@
                 };
 
                 const resetTtsForm = () => {
-                    ttsForm.value = { id: '', name: '', baseUrl: '' };
+                    ttsForm.value = { id: '', name: '', baseUrl: '', supportsQwen: true };
                     isEditingTts.value = false;
                 };
 
@@ -3890,6 +3915,7 @@
                     }
 
                     if (!currentTtsConfig.value) return alert('请先选择 TTS 服务');
+                    if (!currentTtsConfig.value.supportsQwen) return alert('当前 TTS 服务不支持 Qwen 音色设计');
                     if (!char.voiceDescription) return alert('请先填写音色描述');
 
                     char.isGeneratingVoice = true;
@@ -3903,9 +3929,13 @@
                     }, 1800000);
 
                     try {
-                        const cfg = currentTtsConfig.value;
-                        let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
-                        if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                         const cfg = currentTtsConfig.value;
+                         let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
+                         if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+
+                         // 本地 IndexTTS2 走 Unitale 同源代理，云端配置保持原 URL 直连。
+                         const isLocalTts = /^(https?:\/\/)(localhost|127\.0\.0\.1):8300$/i.test(baseUrl);
+                         const ttsBaseUrl = isLocalTts ? '/local-tts' : baseUrl;
 
                         const template = useCustomQwenVoiceText.value ? customQwenVoiceTextTemplate.value : defaultQwenVoiceTextTemplate;
                         const textToUse = template.replace(/\${charName}/g, char.name).replace(/\${char\.name}/g, char.name);
@@ -3916,7 +3946,7 @@
                         };
 
                         // 1. 调用 Qwen3 生成音频
-                        const genRes = await fetch(`${baseUrl}/v1/qwen/design`, {
+                         const genRes = await fetch(`${ttsBaseUrl}/v1/qwen/design`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload),
@@ -3945,7 +3975,7 @@
                         formData.append('audio', file);
                         formData.append('full_path', filename);
 
-                        const upRes = await fetch(`${baseUrl}/v1/upload_audio`, {
+                         const upRes = await fetch(`${ttsBaseUrl}/v1/upload_audio`, {
                             method: 'POST',
                             body: formData,
                             signal: controller.signal
@@ -4026,16 +4056,18 @@
                         return;
                     }
 
-                    let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
-                    if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
-                    console.log(`正在同步音色文件到服务器: ${baseUrl}`);
+                     let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
+                     if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                     const isLocalTts = /^(https?:\/\/)(localhost|127\.0\.0\.1):8300$/i.test(baseUrl);
+                     const ttsBaseUrl = isLocalTts ? '/local-tts' : baseUrl;
+                     console.log(`正在同步音色文件到服务器: ${baseUrl}`);
 
                     // ★ 工单优化：cloudflare 临时域名 / 内网未互通时第一次 check 就失败，
                     //   后续十几个 timbre 反复失败会把控制台刷红，掩盖真正重要的日志。
                     //   先做一次轻量探测，不可达直接整段跳过，不要再逐个试。
                     let serverReachable = true;
                     try {
-                        const probeRes = await fetch(`${baseUrl}/v1/check/audio?file_name=__probe__`, { signal: AbortSignal.timeout(3000) });
+                         const probeRes = await fetch(`${ttsBaseUrl}/v1/check/audio?file_name=__probe__`, { signal: AbortSignal.timeout(3000) });
                         if (!probeRes.ok) serverReachable = false;
                     } catch (e) {
                         serverReachable = false;
@@ -4078,7 +4110,7 @@
 
                         try {
                             // 1. 检查服务器是否存在
-                            const checkUrl = `${baseUrl}/v1/check/audio?file_name=${encodeURIComponent(t.refPath)}`;
+                             const checkUrl = `${ttsBaseUrl}/v1/check/audio?file_name=${encodeURIComponent(t.refPath)}`;
                             const checkRes = await fetch(checkUrl);
                             let exists = false;
                             if (checkRes.ok) {
@@ -4093,7 +4125,7 @@
                                 formData.append('audio', file);
                                 formData.append('full_path', t.refPath);
 
-                                await fetch(`${baseUrl}/v1/upload_audio`, {
+                                 await fetch(`${ttsBaseUrl}/v1/upload_audio`, {
                                     method: 'POST',
                                     body: formData,
                                 });
@@ -4603,16 +4635,18 @@
                             emo_vector: finalVector
                         };
 
-                        const cfg = currentTtsConfig.value;
-                        let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
-                        if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                         const cfg = currentTtsConfig.value;
+                         let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
+                         if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                         const isLocalTts = /^(https?:\/\/)(localhost|127\.0\.0\.1):8300$/i.test(baseUrl);
+                         const ttsBaseUrl = isLocalTts ? '/local-tts' : baseUrl;
 
-                        // 主动确保 TTS 后端已持有该音色文件。
+                         // 主动确保 TTS 后端已持有该音色文件。
                         // TTS 后端的 /v2/synthesize 把 audio_path 哈希后到自家 PROMPTS_DIR 取文件，
                         // 若不先 /v1/upload_audio 上传过去就会返回 404 "音频不存在"。
                         // 因此这里不依赖 localFileMap 是否有 blob —— 没有就先尝试从默认 timbres 目录拉。
                         try {
-                            const checkUrl = `${baseUrl}/v1/check/audio?file_name=${encodeURIComponent(char.voiceFile)}`;
+                             const checkUrl = `${ttsBaseUrl}/v1/check/audio?file_name=${encodeURIComponent(char.voiceFile)}`;
                             const checkRes = await fetch(checkUrl, { signal: internalSignal });
                             let exists = false;
                             if (checkRes.ok) {
@@ -4636,7 +4670,7 @@
                                     const formData = new FormData();
                                     formData.append('audio', uploadFile, char.voiceFile);
                                     formData.append('full_path', char.voiceFile);
-                                    await fetch(`${baseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
+                                     await fetch(`${ttsBaseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
                                 } else if (uploadFromUrl) {
                                     const pullRes = await fetch(uploadFromUrl, { signal: internalSignal });
                                     if (!pullRes.ok) {
@@ -4647,7 +4681,7 @@
                                     const formData = new FormData();
                                     formData.append('audio', fallbackFile, char.voiceFile);
                                     formData.append('full_path', char.voiceFile);
-                                    await fetch(`${baseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
+                                     await fetch(`${ttsBaseUrl}/v1/upload_audio`, { method: 'POST', body: formData, signal: internalSignal });
                                 } else {
                                     throw new Error(`音色文件 "${char.voiceFile}" 未在上传到 TTS 后端，且无法从默认音色目录兜底拉取。\n请在"音色源配置"页点"同步音色到 TTS 服务器"按钮，或检查音色 refPath 是否落在 timbres/voice 静态挂载目录下。`);
                                 }
@@ -4657,7 +4691,7 @@
                             else throw e; // Propagate abort
                         }
 
-                        const synthRes = await fetch(`${baseUrl}/v2/synthesize`, {
+                         const synthRes = await fetch(`${ttsBaseUrl}/v2/synthesize`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload),
@@ -7812,13 +7846,15 @@ ${JSON.stringify(segmentPayload)}
 
                     ttsAbortController.value = new AbortController();
 
-                    const cfg = currentTtsConfig.value;
-                    let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
-                    if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                         const cfg = currentTtsConfig.value;
+                         let baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '');
+                         if (baseUrl.endsWith('/v1')) baseUrl = baseUrl.slice(0, -3);
+                         const isLocalTts = /^(https?:\/\/)(localhost|127\.0\.0\.1):8300$/i.test(baseUrl);
+                         const ttsBaseUrl = isLocalTts ? '/local-tts' : baseUrl;
 
-                    try {
-                        // 1. 检查音频是否存在
-                        const checkUrl = `${baseUrl}/v1/check/audio?file_name=${encodeURIComponent(ttsRefPath.value)}`;
+                         try {
+                             // 1. 检查音频是否存在
+                         const checkUrl = `${ttsBaseUrl}/v1/check/audio?file_name=${encodeURIComponent(ttsRefPath.value)}`;
                         const checkRes = await fetch(checkUrl, { signal: ttsAbortController.value.signal });
                         if (!checkRes.ok) throw new Error(`Check failed: ${checkRes.status}`);
                         const checkData = await checkRes.json();
@@ -7830,7 +7866,7 @@ ${JSON.stringify(segmentPayload)}
                             formData.append('audio', ttsRefFile.value);
                             formData.append('full_path', ttsRefPath.value);
 
-                            const uploadRes = await fetch(`${baseUrl}/v1/upload_audio`, {
+                             const uploadRes = await fetch(`${ttsBaseUrl}/v1/upload_audio`, {
                                 method: 'POST',
                                 body: formData,
                                 signal: ttsAbortController.value.signal
@@ -7848,7 +7884,7 @@ ${JSON.stringify(segmentPayload)}
                             emo_text: ttsEmoText.value || '中立'
                         };
 
-                        const synthRes = await fetch(`${baseUrl}/v2/synthesize`, {
+                         const synthRes = await fetch(`${ttsBaseUrl}/v2/synthesize`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
@@ -7940,7 +7976,7 @@ ${JSON.stringify(segmentPayload)}
                     prompt, result, reasoning, error, loading,
 
                     // TTS State
-                    currentTtsConfigId, ttsConfigs, ttsRefPath, ttsEmoText,
+                    currentTtsConfigId, currentTtsConfig, ttsConfigs, ttsRefPath, ttsEmoText,
                     audioUrl, ttsLoading, ttsError,
 
                     // TTS Actions

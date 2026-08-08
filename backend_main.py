@@ -9,8 +9,9 @@ import os
 import re
 import time
 import uvicorn
-from fastapi import FastAPI, HTTPException, Form, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+import httpx
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +29,40 @@ app.add_middleware(
 
 # 挂载音效扩展端点（/v1/sfx/*）
 app.include_router(ext.router)
+
+# 仅代理本地 IndexTTS2 兼容服务，云端 TTS 配置仍由前端按原 URL 直连。
+_LOCAL_TTS_BASE_URL = "http://127.0.0.1:8300"
+_LOCAL_TTS_ALLOWED_PREFIXES = ("/health", "/v1/", "/v2/synthesize")
+
+
+@app.api_route("/local-tts/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def local_tts_proxy(path: str, request: Request):
+    target_path = "/" + path
+    if not any(target_path == prefix or target_path.startswith(prefix) for prefix in _LOCAL_TTS_ALLOWED_PREFIXES):
+        raise HTTPException(status_code=404, detail="本地 TTS 代理不允许此路径")
+
+    target = f"{_LOCAL_TTS_BASE_URL}{target_path}"
+    if request.url.query:
+        target += f"?{request.url.query}"
+
+    body = await request.body()
+    headers = {
+        key: value for key, value in request.headers.items()
+        if key.lower() in {"content-type", "accept"}
+    }
+    async with httpx.AsyncClient(trust_env=False, timeout=None) as client:
+        upstream = await client.request(request.method, target, content=body, headers=headers)
+
+    response_headers = {
+        key: value for key, value in upstream.headers.items()
+        if key.lower() not in {"content-length", "transfer-encoding", "connection"}
+    }
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=upstream.headers.get("content-type"),
+    )
 
 # ========== 音色落盘与文件夹打开功能 ==========
 _STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
