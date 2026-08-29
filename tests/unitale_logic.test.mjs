@@ -463,6 +463,25 @@ test('validateSourceSegments 只按逐行拼接验证程序切片，不忽略空
   });
 });
 
+test('createSourceSegments 对连续标点无损（修复原文切片完整性校验失败）', () => {
+  // 用户原文触发点：长片段内出现 ASCII 逗号紧跟全角逗号 "无路可退,，"
+  const original = '唯独农民扎根土地无路可退,，赋税重 ,农具差, 盐质劣,天灾频，他们不闹不反，只是默默压缩口粮，降低消费 ，湊合着活下去。';
+  const compressed = compressChineseWhitespace(original);
+  const segments = createSourceSegments(original, 80);
+  // 与真实调用保持一致：校验拿压缩版原文比对
+  assert.equal(validateSourceSegments(compressed, segments).ok, true, '连续标点不应丢字');
+  // 切片拼接必须逐字等于（压缩后的）原文
+  assert.equal(segments.map(s => s.text).join(''), compressed);
+});
+
+test('createSourceSegments 片段以标点开头仍无损（兜底硬切）', () => {
+  const original = ',。开头就是标点的超长文本，需要被安全切分而不丢失任何字符，否则校验会失败并中断分析流程，这里补足够多的字凑过八十上限。';
+  const compressed = compressChineseWhitespace(original);
+  const segments = createSourceSegments(original, 80);
+  assert.equal(validateSourceSegments(compressed, segments).ok, true, '片段以标点开头不应丢字');
+  assert.equal(segments.map(s => s.text).join(''), compressed);
+});
+
 test('sanitizeEmotionFields 把非法情绪和强度回退到合法默认值', () => {
   // 合法值保持不变
   assert.deepEqual(sanitizeEmotionFields('高兴', '强烈'), { emotion: '高兴', intensity: '强烈' });

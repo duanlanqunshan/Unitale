@@ -458,7 +458,7 @@ export function findBestMatchName(target, library) {
   return '';
 }
 
-const NATURAL_SEGMENT_PATTERN = /[^。！？!?；;：:，,\n]+[。！？!?；;：:，,]?|\n+/gu;
+const NATURAL_SEGMENT_PATTERN = /[^。！？!?；;：:，,\n]+[。！？!?；;：:，,]*|\n+/gu;
 
 function hardSplit(text, limit) {
   const chars = Array.from(text);
@@ -497,6 +497,12 @@ export function splitDialogueText(text, limit = 120) {
     }
   }
   if (current) result.push(current);
+  const joined = result.join('');
+  if (joined !== source) {
+    // 兜底：正则未按预期覆盖全部字符（如片段以标点开头、或连续标点）时，
+    // 退回按字数硬切，保证逐字无损，绝不丢字。
+    return hardSplit(source, limit);
+  }
   return result;
 }
 

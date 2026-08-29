@@ -8,6 +8,7 @@
 import os
 import re
 import time
+import json
 import uvicorn
 import httpx
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Request
@@ -34,6 +35,34 @@ app.include_router(ext.router)
 _LOCAL_TTS_BASE_URL = "http://127.0.0.1:8300"
 _LOCAL_TTS_ALLOWED_PREFIXES = ("/health", "/v1/", "/v2/synthesize")
 
+# 本地 TTS 上游会拿 text 字段拼输出文件名，含 " 。 等字符会触发 LibsndfileError。
+# 仅在 local_tts_proxy 里清洗 body.text，云端直连不经过这里，互不影响。
+_TTS_TEXT_SANITIZE_RE = re.compile(r'["\*:<>|?\\/]|[\u3002\u3001\uff01\uff1f]')
+
+
+def _sanitize_tts_text(text: str) -> str:
+    """清掉上游文件名不允许的字符，但保留语义内容（中文、字母、数字、常见标点）。"""
+    if not isinstance(text, str):
+        return text
+    cleaned = _TTS_TEXT_SANITIZE_RE.sub('', text)
+    # 折叠多余空白，避免文件名出现连续空格
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned or 'tts'
+
+
+def _sanitize_tts_body(body: bytes, content_type: str) -> bytes:
+    """对 JSON body 中的 text 字段做清洗。非 JSON 或无 text 字段则原样返回。"""
+    if not body or 'application/json' not in (content_type or ''):
+        return body
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if not isinstance(data, dict) or 'text' not in data:
+        return body
+    data['text'] = _sanitize_tts_text(data['text'])
+    return json.dumps(data, ensure_ascii=False).encode('utf-8')
+
 
 @app.api_route("/local-tts/{path:path}", methods=["GET", "POST", "OPTIONS"])
 async def local_tts_proxy(path: str, request: Request):
@@ -45,11 +74,17 @@ async def local_tts_proxy(path: str, request: Request):
     if request.url.query:
         target += f"?{request.url.query}"
 
-    body = await request.body()
+    raw_body = await request.body()
+    content_type = request.headers.get('content-type', '')
+    # 仅对 synthesize / qwen.design 这类带 text 字段的请求清洗
+    needs_sanitize = target_path.endswith('/v2/synthesize') or target_path.endswith('/v1/qwen/design')
+    body = _sanitize_tts_body(raw_body, content_type) if needs_sanitize else raw_body
     headers = {
         key: value for key, value in request.headers.items()
         if key.lower() in {"content-type", "accept"}
     }
+    if needs_sanitize and body is not raw_body:
+        headers['content-type'] = 'application/json'
     async with httpx.AsyncClient(trust_env=False, timeout=None) as client:
         upstream = await client.request(request.method, target, content=body, headers=headers)
 
